@@ -385,3 +385,15 @@ def test_payment_return_download_is_permission_scoped(workspace):
     downloaded=c.get(f'/api/documents/{file_id}/download')
     assert downloaded.status_code==200
     assert downloaded.content==b'ref,status\nSYNTHETIC,pending\n'
+
+def test_legacy_intake_purpose_remains_visible_after_payment_category_added(workspace):
+    from sqlalchemy import update
+    c,h,conv=workspace
+    with Session(c.app.state.engine) as db,db.begin():
+        file=db.scalar(select(StoredFile).where(StoredFile.original_filename=='claims.csv'))
+        file_id=file.id
+        file.purpose='intake'
+    visible=c.get('/api/documents',params={'conversation_id':conv})
+    assert visible.status_code==200
+    assert file_id in [row['id'] for row in visible.json()]
+    assert c.get(f'/api/documents/{file_id}/download').status_code==200

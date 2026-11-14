@@ -98,7 +98,10 @@ def scoped_documents(db, principal, conversation_id=None, *, purpose='timesheet'
     allowed = [key for key, permissions in principal.project_permissions.items() if "timesheets.view" in permissions]
     own = select(Conversation.id).where(Conversation.owner_id == principal.user.id)
     query = select(StoredFile, DocumentImport).join(DocumentImport).where(
-        StoredFile.purpose == purpose,
+        # Historical pre-category imports used the 'intake' purpose.
+        # Preserve their visibility without mixing in payment returns.
+        (StoredFile.purpose.in_(('timesheet', 'intake')) if purpose == 'timesheet'
+         else StoredFile.purpose == purpose),
         StoredFile.project_id.in_(allowed),
         or_((DocumentImport.conversation_id.is_(None)) & (StoredFile.uploaded_by == principal.user.id), DocumentImport.conversation_id.in_(own)),
     )
@@ -229,11 +232,12 @@ def download(file_id: UUID, request: Request, principal: Authenticated, db: Data
     # Do not mix financial returns into timesheet discovery. Explicitly scoped
     # download still works for a payment-return evidence owner.
     candidate = db.get(StoredFile, str(file_id))
-    if candidate is None or candidate.purpose not in {'timesheet', 'payment_return'}:
+    if candidate is None or candidate.purpose not in {'timesheet', 'intake', 'payment_return'}:
         raise HTTPException(404, "Document unavailable")
     if candidate.purpose == 'payment_return':
         principal.require('payments.view', candidate.project_id)
-    row = db.execute(scoped_documents(db, principal, purpose=candidate.purpose)
+    category = 'timesheet' if candidate.purpose == 'intake' else candidate.purpose
+    row = db.execute(scoped_documents(db, principal, purpose=category)
                      .where(StoredFile.id == str(file_id))).one_or_none()
     if row is None:
         raise HTTPException(404, "Document unavailable")
