@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from test_foundation import client, ORIGIN, PASSWORD
 from timmy.auth import password_hasher
-from timmy.models import Role, User, WorkflowRun, StoredFile, projects, project_memberships
+from timmy.models import Role, User, WorkflowRun, StoredFile, projects, project_memberships, PlanningCodeContract, activities
 from timmy.workflows import choose_workflow, knowledge
 from timmy.workflow_scheduler import run_due
 
@@ -23,6 +23,7 @@ def workspace(client, tmp_path):
         db.flush()
         db.execute(insert(project_memberships).values(project_id=1, user_id=99))
         db.execute(update(projects).where(projects.c.id == 1).values(project_code='P'))
+        db.add(PlanningCodeContract(project_id=1,version='synthetic-only',code_pattern='A',source_ref='SYNTHETIC_TEST_ONLY',approved_by=99,approved_at=1))
     result = client.post('/api/auth/login', headers=ORIGIN, json={'username':'workflow-main','password':PASSWORD})
     headers = ORIGIN | {'X-CSRF-Token':result.json()['csrf_token']}
     conversation = client.post('/api/chat/conversations', headers=headers).json()['id']
@@ -72,6 +73,7 @@ def test_intake_offers_processing_and_persists_replay(workspace):
 
 def test_weekly_steps_block_finance_and_use_same_api_runner(workspace):
     c,h,conv = workspace
+    send(workspace,'Process'); send(workspace,'Confirmed')
     key = str(uuid4())
     response = c.post('/api/workflows/runs',headers=h,json={'request_id':key,'project_id':1,'workflow_id':'weekly_cycle'})
     assert response.status_code == 201, response.text
@@ -102,10 +104,10 @@ def test_processing_uses_frozen_report_cutoff(workspace):
         def health(self): return 'ready'
         def events(self,*args):
             return [ReportEvent(report_id='R',version='1',submitted_at='2026-07-01T00:00:00Z',validated_at='2026-07-02T00:00:00Z',evidence_ref='test-only')]
+    send(workspace,'Process');send(workspace,'Confirmed')
     synchronize(c.app.state.engine,Provider(),project_id=1,activity_code='A',timezone='UTC')
     _,response = send(workspace,'Process')
-    assert 'Mapping proposal' in response.json()['message']['text']
-    _,response = send(workspace,'Confirmed')
+    assert 'Mapping proposal' not in response.json()['message']['text']
     assert 'AFTER_VALIDATED_REPORT_CUTOFF' in response.json()['message']['text']
     assert '6/12 role slots' in response.json()['message']['text']
 
@@ -193,12 +195,13 @@ def test_scheduler_disabled_and_summer_local_time(workspace):
 
 def test_weekly_replay_with_changed_evidence_conflicts(workspace):
     c,h,_=workspace
+    send(workspace,'Process');send(workspace,'Confirmed')
     payload={'request_id':str(uuid4()),'project_id':1,'workflow_id':'weekly_cycle'}
     first=c.post('/api/workflows/runs',headers=h,json=payload)
     assert first.status_code==201
     with Session(c.app.state.engine) as db,db.begin():
         from timmy.models import ExternalReportVersion
-        db.add(ExternalReportVersion(project_id=1,activity_code='A',source='synthetic',report_id='R',version='1',
+        db.add(ExternalReportVersion(project_id=1,activity_id=db.scalar(select(activities.c.id).where(activities.c.activity_code=='A')),activity_code='A',source='synthetic',report_id='R',version='1',
                                     submitted_at='2026-07-01T00:00:00Z',local_date='2026-07-01',cutoff='2026-07-01',
                                     validated_at='2026-07-02T00:00:00Z',evidence_ref='test-only'))
     assert c.post('/api/workflows/runs',headers=h,json=payload).status_code==409

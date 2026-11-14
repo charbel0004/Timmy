@@ -6,7 +6,7 @@ import { errorMessage, request } from "./api";
 import type { Session } from "./api";
 
 interface Project { id: number; name: string; project_code: string | null; status: string }
-interface Activity { id: number; name: string; project: string }
+interface Activity { id: number; name: string; project: string; activity_code: string | null; code_authority: string; planned_start: string | null; planned_end: string | null }
 function mutate<T>(path: string, method: string, csrf?: string, body?: object) {
   return request<T>(`/workspace${path}`, {
     method,
@@ -131,7 +131,7 @@ export function Administration({ page, session }: {
           <form className="admin-grid" onSubmit={(event) => submit(event, (f) =>
             void save(`/projects/${project.id}`, "PATCH", { name: f.get("name"), code: f.get("code") }))}>
             <label>Name<input required name="name" defaultValue={project.name} maxLength={160} /></label>
-            <label>Code<input required name="code" defaultValue={project.project_code ?? ""} maxLength={80} /></label>
+            <label>Project code<input required name="code" defaultValue={project.project_code ?? ""} maxLength={80} /></label>
             <button disabled={busy}>Save project</button>
           </form></details>}
         <ProjectPaymentPolicies projectId={project.id} csrf={session.csrf_token} canManage={canManage && ["draft", "active"].includes(project.status)} />
@@ -146,15 +146,13 @@ export function Administration({ page, session }: {
       </article>)}
     </>}
     {page === "activities" && <>
-      {canManage && <form className="glass-panel admin-form" onSubmit={(event) => submit(event, (f) =>
-        void save(`/projects/${f.get("project")}/activities`, "POST", { name: f.get("name") }))}>
-        <h2>Add activity</h2><ProjectSelect projects={projects.filter((p) => ["draft", "active"].includes(p.status))} />
-        <label>Name<input name="name" required maxLength={160} /></label><button disabled={busy}>Add activity</button>
-      </form>}
       <div className="glass-panel admin-form"><h2>Project activities</h2>
+        <p>Activities are events imported from planning. Their permanent codes link planning, timesheets and reports to this list.</p>
+        <p>Process the planning sheet in the assistant. Codes must be supplied by authoritative planning. Missing codes are blocked; Timmy never generates them.</p>
         {!busy && !error && !activities.length && <p>No activities recorded.</p>}
-        <ul>{activities.map((item) => <li key={item.id}>{item.project} · {item.name}</li>)}</ul>
-        <p className="muted">Task assignment is awaiting its workflow contract.</p>
+        <ul>{activities.map((item) => <li key={item.id}>{item.project} · {item.activity_code ?? "Legacy activity: planning link required"} · {item.name}
+          {item.code_authority !== "source_supplied" && <small> · Legacy identity: source-authority review required</small>}
+          {item.planned_start && <small> · {item.planned_start} – {item.planned_end} · Imported planning evidence; approval remains separate</small>}</li>)}</ul>
       </div>
     </>}
   </section>;

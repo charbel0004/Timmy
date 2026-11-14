@@ -27,7 +27,7 @@ def escape(value):
     return re.sub(r"([^\w\s])", r"\\\1", " ".join(value.split()))
 
 
-def preview(documents, *, snapshot=None, report_cutoffs=None, project_codes=None):
+def preview(documents, *, snapshot=None, report_cutoffs=None, activity_registry=None, project_codes=None):
     plans = defaultdict(set)
     directory = defaultdict(set)
     claims = defaultdict(list)
@@ -118,6 +118,16 @@ def preview(documents, *, snapshot=None, report_cutoffs=None, project_codes=None
             break
         codes = issues[key]
         candidates = plans[key]
+        registered = (activity_registry or {}).get(key)
+        if activity_registry is not None:
+            if not registered:
+                codes['ACTIVITY_NOT_IN_PLANNING'] += 1
+            elif not candidates:
+                candidates = {(registered['planned_start'], registered['planned_end'])}
+            elif candidates != {(registered['planned_start'], registered['planned_end'])}:
+                codes['PLANNING_EVIDENCE_CONFLICT'] += 1
+        if project_codes is not None and project_codes.get(key[0]) != project:
+            codes['PROJECT_CODE_MISMATCH'] += 1
         start, end = None, None
         if len(candidates) == 1:
             start, end = map(parse_date, next(iter(candidates)))
@@ -138,6 +148,7 @@ def preview(documents, *, snapshot=None, report_cutoffs=None, project_codes=None
         if snapshot is not None:
             snapshot["activities"].append({
                 "project_code": project, "activity_code": activity,
+                "activity_id": registered['id'] if registered else None,
                 "structure": "PASSED" if result.complete and not codes else "FLAGGED",
                 "session_pairs": len(result.accepted) // 2, "role_slots": len(result.accepted),
                 "issues": dict(codes), "planning": "PENDING", "staff": "PENDING", "report": "EVIDENCE RECORDED" if report else "PENDING",

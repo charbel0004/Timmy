@@ -330,6 +330,7 @@ export function Assistant({ conversation, append, canReadProjects, csrfToken, on
           }} />
         {workflow?.scope && <div role="status" aria-label="Persisted workflow state">
           <p>Workflow: {workflow.stage} · {workflow.scope.source_ids.length} files · {workflow.scope.source_rows} source rows in scope.</p>
+          {workflow.mapping?.confirmation_method === "verified_format_reuse" && <p>Using your previously confirmed column format; routine checks continued automatically.</p>}
           {workflow.validation && <p>Structural validation: {workflow.validation.status}
             {workflow.validation.run_id && ` · Run #${workflow.validation.run_id}`}
             {workflow.validation.error_code && ` · ${workflow.validation.error_code}`}</p>}

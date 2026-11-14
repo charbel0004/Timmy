@@ -294,13 +294,14 @@ def resolve_documents(db, principal, conversation_id, project_id=None, document_
 
 
 def project_report_cutoffs(db, project_id):
-    from .models import ExternalReportVersion
+    from .models import ExternalReportVersion, activities
 
     code = db.scalar(select(projects.c.project_code).where(projects.c.id == project_id))
     if not code:
         return {}
-    versions = db.scalars(select(ExternalReportVersion).where(
+    versions = db.scalars(select(ExternalReportVersion).join(activities, activities.c.id == ExternalReportVersion.activity_id).where(
         ExternalReportVersion.project_id == project_id, ExternalReportVersion.cutoff.is_not(None),
+        activities.c.project_id == project_id, activities.c.activity_code == ExternalReportVersion.activity_code, activities.c.code_authority == 'source_supplied',
     ).order_by(ExternalReportVersion.id))
     result = {}
     for row in versions:
@@ -330,8 +331,12 @@ def persist_validation(project_id: int, request: Request, principal: Authenticat
     documents = resolve_documents(db, principal, None, project_id)
     cutoffs = project_report_cutoffs(db, project_id)
     project_code = db.scalar(select(projects.c.project_code).where(projects.c.id == project_id))
+    from .planning_activities import registry
+    activity_registry = registry(db, [project_id])
     cutoff_key = ":".join(f"{value['id']}@{value['cutoff']}" for value in cutoffs.values())
-    fingerprint = sha256(("structural-v3:" + (project_code or "") + ":" + cutoff_key + ":" + str(principal.user.id) + ":" + ":".join(sorted(file.id for file, _ in documents))).encode()).hexdigest()
+    import json
+    registry_key = json.dumps([[list(k),v] for k,v in sorted(activity_registry.items())], sort_keys=True)
+    fingerprint = sha256(("structural-v4:" + (project_code or "") + ":" + registry_key + cutoff_key + ":" + str(principal.user.id) + ":" + ":".join(sorted(file.id for file, _ in documents))).encode()).hexdigest()
     existing = db.scalar(select(StructuralValidation).where(
         StructuralValidation.project_id == project_id, StructuralValidation.fingerprint == fingerprint,
         StructuralValidation.actor_id == principal.user.id,
@@ -339,8 +344,8 @@ def persist_validation(project_id: int, request: Request, principal: Authenticat
     if existing:
         return validation_view(readable_validation(db, principal, existing.id))
     snapshot = {"claims": [], "activities": []}
-    if preview(documents, snapshot=snapshot, report_cutoffs=cutoffs,
-               project_codes={project_id: project_code}) is None or not snapshot["activities"]:
+    if preview(documents, snapshot=snapshot, report_cutoffs=cutoffs, activity_registry=activity_registry,
+               project_codes={project_id:db.scalar(select(projects.c.project_code).where(projects.c.id == project_id))}) is None or not snapshot["activities"]:
         raise HTTPException(422, "No supported session claims in the visible project documents")
     event = StructuralValidation(project_id=project_id, actor_id=principal.user.id,
                                  fingerprint=fingerprint, created_at=int(time()), snapshot=snapshot)

@@ -12,7 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .audit import audit
-from .models import ExternalReportVersion
+from .models import ExternalReportVersion, activities, projects
 
 
 class ReportEvent(BaseModel):
@@ -43,11 +43,19 @@ def synchronize(engine, provider: ReportProvider, *, project_id: int, activity_c
         raise ValueError("Too many report versions")
     with engine.connect() as connection, Session(bind=connection) as db:
         connection.exec_driver_sql("BEGIN IMMEDIATE")
+        activity_id=db.scalar(select(activities.c.id).where(activities.c.project_id==project_id,
+                                                           activities.c.activity_code==activity_code,activities.c.code_authority=='source_supplied'))
+        if activity_id is None:
+            raise ValueError('Activity is not registered from planning; import its planning evidence first')
         query = select(ExternalReportVersion).where(
             ExternalReportVersion.project_id == project_id,
             ExternalReportVersion.activity_code == activity_code,
         )
         current = {row.version: row for row in db.scalars(query)}
+        if any(row.activity_id not in (None,activity_id) for row in current.values()):
+            raise ValueError('Conflicting planning activity reference in report evidence')
+        for row in current.values():
+            row.activity_id=activity_id
         authority = {(row.source, row.report_id) for row in current.values()}
         authority.update((provider.source, event.report_id) for event in events)
         if len(authority) > 1:
@@ -81,7 +89,7 @@ def synchronize(engine, provider: ReportProvider, *, project_id: int, activity_c
                 continue
             if row is None:
                 row = ExternalReportVersion(
-                    project_id=project_id, activity_code=activity_code, source=provider.source,
+                    project_id=project_id, activity_code=activity_code, activity_id=activity_id, source=provider.source,
                     report_id=event.report_id, version=event.version,
                     submitted_at=submitted, local_date=local_date, evidence_ref=event.evidence_ref,
                 )

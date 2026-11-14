@@ -1,6 +1,6 @@
 from uuid import uuid4
 
-from sqlalchemy import CheckConstraint, Column, ForeignKey, ForeignKeyConstraint, Integer, JSON, String, Table, Text, UniqueConstraint
+from sqlalchemy import CheckConstraint, Column, ForeignKey, ForeignKeyConstraint, Integer, JSON, String, Table, Text, UniqueConstraint, Index
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .database import Base
@@ -98,6 +98,32 @@ project_memberships = Table(
 activities = Table(
     "activities", metadata, identity(), reference("project_id", "projects.id"),
     Column("name", String(160), nullable=False),
+    Column("activity_code", String(88)),
+    Column("planned_start", String(10)), Column("planned_end", String(10)),
+    Column('code_authority', String(30), nullable=False, server_default='legacy_review_required'),
+    Column('planning_contract_version', String(80)),
+)
+Index('uq_activities_project_activity_code', activities.c.project_id, activities.c.activity_code, unique=True)
+Index('uq_activities_global_code', activities.c.activity_code, unique=True)
+
+
+class PlanningCodeContract(Base):
+    __tablename__ = 'planning_code_contracts'
+    project_id: Mapped[int] = mapped_column(ForeignKey('projects.id'), primary_key=True)
+    version: Mapped[str] = mapped_column(String(80))
+    code_pattern: Mapped[str] = mapped_column(String(128))
+    source_ref: Mapped[str] = mapped_column(Text)
+    approved_by: Mapped[int] = mapped_column(ForeignKey('users.id'))
+    approved_at: Mapped[int]
+
+activity_planning_sources = Table(
+    'activity_planning_sources', metadata, identity(), reference('activity_id', 'activities.id'),
+    reference('project_id', 'projects.id'),
+    Column('file_id', ForeignKey('stored_files.id'), nullable=False),
+    Column('source_sha256', String(64), nullable=False),
+    Column('sheet_index', Integer, nullable=False), Column('source_row', Integer, nullable=False),
+    Column('mapping_id', ForeignKey('mapping_proposals.id'), nullable=False),
+    UniqueConstraint('project_id', 'source_sha256', 'sheet_index', 'source_row'),
 )
 imports = Table(
     "imports", metadata, identity(), reference("project_id", "projects.id"),
@@ -264,6 +290,7 @@ class ExternalReportVersion(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"))
+    activity_id: Mapped[int | None] = mapped_column(ForeignKey('activities.id'))
     activity_code: Mapped[str] = mapped_column(Text)
     source: Mapped[str] = mapped_column(Text)
     report_id: Mapped[str] = mapped_column(Text)

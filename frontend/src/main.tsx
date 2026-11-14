@@ -17,7 +17,7 @@ const pages = {
   assistant: "AI Assistant",
   dashboard: "Overview",
   projects: "Projects",
-  activities: "Activities & Tasks",
+  activities: "Activities",
   imports: "Timesheet Imports",
   timesheets: "Timesheets",
   discrepancies: "Discrepancies",

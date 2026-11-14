@@ -2,12 +2,12 @@
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import insert, select, func
+from sqlalchemy import insert, select, func, update
 from sqlalchemy.orm import Session
 
 from test_foundation import client, ORIGIN, PASSWORD
 from timmy.auth import password_hasher
-from timmy.models import Role, User, WorkflowRun, project_memberships
+from timmy.models import Role, User, WorkflowRun, project_memberships, projects, PlanningCodeContract
 
 
 @pytest.fixture
@@ -21,6 +21,8 @@ def conversation(client, tmp_path, monkeypatch):
         role = Role(name='admin'); db.add(role); db.flush()
         db.add(User(id=90, username='conversation-test', role_id=role.id, password_hash=password_hasher.hash(PASSWORD)))
         db.flush(); db.execute(insert(project_memberships).values(project_id=1, user_id=90))
+        db.execute(update(projects).where(projects.c.id==1).values(project_code='P'))
+        db.add(PlanningCodeContract(project_id=1,version='synthetic-test-v1',code_pattern='TEST-[A-Z]-[0-9]{3}',source_ref='SYNTHETIC_TEST_ONLY',approved_by=90,approved_at=1))
     login = client.post('/api/auth/login', headers=ORIGIN, json={'username':'conversation-test','password':PASSWORD})
     headers = ORIGIN | {'X-CSRF-Token':login.json()['csrf_token']}
     identifier = client.post('/api/chat/conversations', headers=headers).json()['id']
