@@ -26,7 +26,7 @@ jobs:
     env:
       PYTHONPATH: backend
       PYTHONDONTWRITEBYTECODE: "1"
-      TIMMY_DATABASE_URL: sqlite:///${{ runner.temp }}/timmy-ci.db
+      TIMMY_DATABASE_URL: sqlite:///./timmy-ci.db
       TIMMY_WEEKLY_ENABLED: "false"
       TIMMY_DEMO_MODE: "false"
 
