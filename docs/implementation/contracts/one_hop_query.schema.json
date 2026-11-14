@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Bounded direct-neighbor query — draft v1",
+  "type": "object", "additionalProperties": false,
+  "required": ["seed_node_id", "depth", "max_neighbors"],
+  "properties": {
+    "seed_node_id": {"type": "string", "minLength": 1},
+    "depth": {"const": 1},
+    "max_neighbors": {"type": "integer", "minimum": 1, "maximum": 20},
+    "run_id": {"type": ["string", "null"]}
+  }
+}

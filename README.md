@@ -92,3 +92,11 @@ status claims. Revise column mappings creates a new review version without
 overwriting the confirmed one. Scope and state survive reopening the conversation;
 identity, planning, external reports and payments retain their separate gates.
 See [repair report](docs/architecture/conversation-workflow-repair.md).
+
+## Knowledge compiler (operator library)
+
+`timmy.knowledge` compiles Git-pinned, explicitly reviewed atomic notes to immutable
+JSON/SQLite releases. It has no runtime API, policy activation or financial tools;
+the application does not consume its artifacts. See
+[the compiler contract](docs/implementation/COMPILER_CONTRACT_v0.1.md) for trust
+requirements and the remaining authorized retrieval/trace integration work.

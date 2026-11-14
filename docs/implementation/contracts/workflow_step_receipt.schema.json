@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Backend step receipt — draft v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["receipt_id", "run_id", "step_node_id", "step_index", "attempt", "status", "kg_release_id", "policy_version_id", "source_fingerprint", "started_at", "rule_checks", "context_access_refs"],
+  "properties": {
+    "receipt_id": {"type": "string", "minLength": 1},
+    "run_id": {"type": "string", "minLength": 1},
+    "step_node_id": {"type": "string", "pattern": "^STEP-"},
+    "step_index": {"type": "integer", "minimum": 1},
+    "attempt": {"type": "integer", "minimum": 1},
+    "status": {"enum": ["PENDING", "RUNNING", "PASSED", "WAITING_HUMAN", "BLOCKED", "FAILED", "SKIPPED"]},
+    "kg_release_id": {"type": "string", "minLength": 1},
+    "policy_version_id": {"type": "string", "minLength": 1},
+    "binding_code_revision": {"type": ["string", "null"]},
+    "source_fingerprint": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "handler_key": {"type": ["string", "null"]},
+    "started_at": {"type": "string", "format": "date-time"},
+    "ended_at": {"type": ["string", "null"], "format": "date-time"},
+    "input_sha256": {"type": ["string", "null"], "pattern": "^[a-f0-9]{64}$"},
+    "output_sha256": {"type": ["string", "null"], "pattern": "^[a-f0-9]{64}$"},
+    "error_code": {"type": ["string", "null"]},
+    "context_access_refs": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+    "rule_checks": {
+      "type": "array",
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["rule_id", "rule_version", "evaluator", "outcome", "evidence_refs"],
+        "properties": {
+          "rule_id": {"type": "string", "minLength": 1},
+          "rule_version": {"type": "string", "minLength": 1},
+          "evaluator": {"type": "string", "minLength": 1},
+          "outcome": {"enum": ["pass", "fail", "blocked", "not_run"]},
+          "evidence_refs": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+          "reason_code": {"type": ["string", "null"]}
+        }
+      }
+    },
+    "review_request_id": {"type": ["string", "null"]},
+    "audit_event_refs": {"type": "array", "items": {"type": "string"}, "uniqueItems": true}
+  }
+}
