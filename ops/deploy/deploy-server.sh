@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Hackathon MVP: update ONE checkout in place, test, build, then restart.
+# Hackathon MVP: guarded one-checkout deploy, isolated tests, specific schema upgrade.
 # Installed as root-owned /usr/local/sbin/timmy-deploy.
 set -Eeuo pipefail
 umask 077
@@ -14,6 +14,7 @@ repo=/root/apps/Timmy
 web=/var/www/timmy
 backups=/root/timmy-backups
 uv=/root/.local/bin/uv
+isolated_checks="$repo/ops/deploy/run-isolated-backend-checks.sh"
 
 cd "$repo"
 exec 9>/run/lock/timmy-deploy.lock
@@ -47,16 +48,17 @@ if [[ "$previous" == "$requested" ]]; then
   exit 0
 fi
 
-mkdir -p -m 700 "$backups"
-stamp="$(date -u +%Y%m%d-%H%M%S)"
-sqlite3 timmy.db ".backup '$backups/timmy-$stamp.db'"
-[[ "$(sqlite3 "$backups/timmy-$stamp.db" 'PRAGMA quick_check')" == ok ]] || exit 1
-
 # Temporary test data and static-file rollback copy, NOT a release directory.
 temp="$(mktemp -d /tmp/timmy-deploy.XXXXXXXX)"
 rsync -a "$web/" "$temp/previous-web/"
 
+mkdir -p -m 700 "$backups"
+stamp="$(date -u +%Y%m%d-%H%M%S)"
+backup_file="$backups/timmy-$stamp.db"
+original_revision="$(sqlite3 timmy.db 'SELECT version_num FROM alembic_version LIMIT 1')"
+
 needs_restore=false
+migration_attempted=false
 web_changed=false
 cleanup() {
   code="$?"
@@ -67,11 +69,35 @@ cleanup() {
     cd "$repo" || exit "$code"
     git reset --hard "$previous"
     "$uv" pip install --python .venv/bin/python -r backend/requirements-dev.txt
+
+    # Forward-only migrations require restoration of the consistent offline
+    # backup if ANY later release gate fails. Never restart old code on 0017.
+    recovery_ok=true
+    if [[ "$migration_attempted" == true ]]; then
+      if ! sqlite3 timmy.db ".restore '$backup_file'" ||
+         [[ "$(sqlite3 timmy.db 'PRAGMA integrity_check')" != ok ]] ||
+         [[ "$(sqlite3 timmy.db 'SELECT version_num FROM alembic_version LIMIT 1')" != "$original_revision" ]]; then
+        recovery_ok=false
+        echo "DATABASE_RESTORE_FAILED: leave service stopped; inspect $backup_file" >&2
+      fi
+    fi
     if [[ "$web_changed" == true ]]; then
       rsync -a --delete "$temp/previous-web/" "$web/"
     fi
-    systemctl start timmy-api
-    curl -fsS --max-time 5 http://127.0.0.1:8000/api/health || true
+    if [[ "$recovery_ok" == true ]]; then
+      systemctl start timmy-api
+      recovered=false
+      for i in {1..25}; do
+        if curl -fsS --max-time 2 http://127.0.0.1:8000/api/health 2>/dev/null |
+             grep -Eq '"status"[[:space:]]*:[[:space:]]*"ok"'; then
+          recovered=true
+          break
+        fi
+        sleep 2
+      done
+      [[ "$recovered" == true ]] ||
+        echo 'ROLLBACK_HEALTH_FAILED: operator must check timmy-api service' >&2
+    fi
   fi
   [[ -n "$temp" ]] && rm -rf -- "$temp"
   exit "$code"
@@ -89,28 +115,43 @@ command -v npm >/dev/null
 
 needs_restore=true
 systemctl stop timmy-api
+
+# Take an OFFLINE, consistent snapshot after stopping the only API writer.
+# Never use the pre-stop backup for rollback: it can miss in-flight writes.
+sqlite3 timmy.db ".backup '$backup_file'"
+[[ "$(sqlite3 "$backup_file" 'PRAGMA integrity_check')" == ok ]] || exit 1
+[[ -z "$(sqlite3 "$backup_file" 'PRAGMA foreign_key_check')" ]] || exit 1
+[[ "$(sqlite3 "$backup_file" 'SELECT version_num FROM alembic_version LIMIT 1')" == "$original_revision" ]] || exit 1
+
 git reset --hard "$requested"
 
 "$uv" pip install --python .venv/bin/python -r backend/requirements-dev.txt
 
-# Tests and migrations use a disposable SQLite database, never timmy.db.
-export TIMMY_DATABASE_URL="sqlite:///$temp/test.db"
-export TIMMY_DOCUMENT_ROOT="$temp/documents"
-export TIMMY_WEEKLY_ENABLED=false
-export TIMMY_DEMO_MODE=false
-export PYTHONPATH=backend
-.venv/bin/python -m pytest -q backend/tests -p no:cacheprovider --basetemp="$temp/pytest"
-.venv/bin/alembic -c backend/alembic.ini upgrade head
-[[ "$(sqlite3 "$temp/test.db" 'PRAGMA integrity_check')" == ok ]]
-unset TIMMY_DATABASE_URL TIMMY_DOCUMENT_ROOT TIMMY_WEEKLY_ENABLED TIMMY_DEMO_MODE PYTHONPATH
-
-# Any schema upgrade must be performed separately and reviewed; rollback is code-only.
-live_revision="$(sqlite3 timmy.db 'SELECT version_num FROM alembic_version LIMIT 1')"
-desired_revision="$(.venv/bin/alembic -c backend/alembic.ini heads | awk 'NR==1 {print $1}')"
-[[ -n "$desired_revision" && "$live_revision" == "$desired_revision" ]] || {
-  echo "Migration gate: live=$live_revision expected=$desired_revision" >&2
-  exit 1
+# Production .env MUST NOT leak into tests. The helper copies only backend
+# source to a temporary root and runs tests with env -i on a disposable DB.
+[[ -f "$isolated_checks" ]] || {
+  echo 'Missing isolated test runner in requested commit' >&2; exit 1;
 }
+bash "$isolated_checks" "$repo" "$repo/.venv/bin/python" "$temp"
+
+# This one-time release has an explicitly reviewed ADDITIVE migration.
+# No unknown future migrations are permitted by unattended CD.
+live_revision="$(sqlite3 timmy.db 'SELECT version_num FROM alembic_version LIMIT 1')"
+desired_revision="$(.venv/bin/python -m alembic -c backend/alembic.ini heads | awk 'NR==1 {print $1}')"
+if [[ "$live_revision" != "$desired_revision" ]]; then
+  if [[ "$live_revision" != 0016 || "$desired_revision" != 0017 ]]; then
+    echo "SCHEMA_CHANGE_NOT_APPROVED: live=$live_revision expected=$desired_revision" >&2
+    exit 1
+  fi
+  echo 'APPLYING_APPROVED_SCHEMA_MIGRATION 0016 -> 0017'
+  migration_attempted=true
+  # Explicit database URL overrides the application's .env. The API is stopped.
+  TIMMY_DATABASE_URL="sqlite:///$repo/timmy.db" PYTHONPATH="$repo/backend"     .venv/bin/python -m alembic -c backend/alembic.ini upgrade 0017
+  [[ "$(sqlite3 timmy.db 'SELECT version_num FROM alembic_version LIMIT 1')" == 0017 ]]
+  [[ "$(sqlite3 timmy.db 'PRAGMA integrity_check')" == ok ]]
+  [[ -z "$(sqlite3 timmy.db 'PRAGMA foreign_key_check')" ]]
+  echo 'APPROVED_SCHEMA_MIGRATION_VERIFIED'
+fi
 
 npm ci --prefix frontend
 npm test --prefix frontend
