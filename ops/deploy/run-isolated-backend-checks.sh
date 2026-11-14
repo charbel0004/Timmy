@@ -24,6 +24,10 @@ target="${4:-backend/tests}"
 # contains production .env (which may set HTTPS cookies, origin and AI config).
 mkdir -p -m 700 "$scratch/source" "$scratch/home"
 cp -a "$repo/backend" "$scratch/source/backend"
+# Some backend regression tests assert deployment policy from ops/deploy.
+# Bring only reviewed script/test fixtures, never root .env or live files.
+mkdir -p "$scratch/source/ops"
+cp -a "$repo/ops/deploy" "$scratch/source/ops/deploy"
 [[ ! -e "$scratch/source/.env" ]] || {
   echo 'Isolated source unexpectedly contains a .env file' >&2; exit 1;
 }
@@ -38,6 +42,8 @@ run_test_command -m alembic -c "$scratch/source/backend/alembic.ini" upgrade hea
 run_test_command -m alembic -c "$scratch/source/backend/alembic.ini" current
 
 # Validate the disposable copy, not the production database.
-[[ "$(sqlite3 "$scratch/test.db" 'PRAGMA integrity_check')" == ok ]]
-[[ -z "$(sqlite3 "$scratch/test.db" 'PRAGMA foreign_key_check')" ]]
+run_test_command -c 'import sqlite3, sys
+with sqlite3.connect(sys.argv[1]) as db:
+    assert db.execute("PRAGMA integrity_check").fetchone() == ("ok",)
+    assert db.execute("PRAGMA foreign_key_check").fetchall() == []' "$scratch/test.db"
 echo 'ISOLATED_BACKEND_CHECKS_PASSED'
