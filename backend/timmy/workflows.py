@@ -212,7 +212,20 @@ def run_workflow(db, principal, config, *, workflow_id, project_id, request_key,
         }
         return step_result(step, 'blocked', blockers.get(step, ['UNREGISTERED_WORKFLOW_STEP']))
 
-    results = execute_graph(definitions[workflow_id].steps, evaluate)
+    # Legacy structural consumers need the previously parsed preview even when
+    # the protected validation step did not run. Its receipt remains BLOCKED,
+    # with attempted/executed=false and explicit provisional evidence labeling.
+    # Known prerequisites are informational, NOT claims of guard evaluation.
+    def held_context(step):
+        if step == 'validate_activity':
+            return {'activities': activities, 'structural_preview_only': True,
+                    'evidence_kind': 'provisional_structural_preview'}
+        if step in {'prepare_payment_request', 'export_payment_request'}:
+            return {'unverified_requirements': ['EXACT_BATCH_APPROVAL_REQUIRED']}
+        return {}
+
+    results = execute_graph(definitions[workflow_id].steps, evaluate,
+                            blocked_context=held_context)
     status = ('blocked' if any(r['status'] == 'blocked' for r in results) else
               'needs_review' if any(r['status'] == 'needs_review' for r in results) else 'completed')
     run = WorkflowRun(actor_id=principal.user.id, project_id=project_id, request_key=request_key,

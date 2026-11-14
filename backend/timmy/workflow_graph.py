@@ -22,15 +22,23 @@ class ExecutionState(TypedDict):
     blocked_by: str | None
 
 
-def dependency_hold(step: str, blocked_by: str) -> dict:
-    """Document a dependency that was NOT called, without claiming its own guard ran."""
+def dependency_hold(step: str, blocked_by: str, *, read_only: dict | None = None) -> dict:
+    """Document an uninvoked dependency, optionally with precomputed evidence.
+
+    The optional context must already be available: this function never invokes
+    a downstream handler or verifies the step's business prerequisites.
+    """
+    data = dict(read_only or {})
+    known = list(data.pop("unverified_requirements", []))
     return {
         "step": step,
         "status": "blocked",  # Preserve existing public status vocabulary.
-        "issue_codes": ["DEPENDENCY_NOT_SATISFIED"],
+        "issue_codes": ["DEPENDENCY_NOT_SATISFIED", *known],
+        "unverified_requirements": known,
         "attempted": False,
         "executed": False,
         "blocked_by": blocked_by,
+        **data,
     }
 
 
@@ -49,6 +57,7 @@ def execute_graph(
     evaluator: Callable[[str], dict],
     *,
     on_result: Callable[[dict], None] | None = None,
+    blocked_context: Callable[[str], dict] | None = None,
 ) -> list[dict]:
     """Run an approved ordered workflow exactly once.
 
@@ -72,7 +81,10 @@ def execute_graph(
         def execute(state: ExecutionState, *, current: str = step) -> ExecutionState:
             blocked_by = state.get("blocked_by")
             if blocked_by is not None:
-                result = dependency_hold(current, blocked_by)
+                result = dependency_hold(
+                    current, blocked_by,
+                    read_only=blocked_context(current) if blocked_context else None,
+                )
             else:
                 try:
                     result = evaluator(current)

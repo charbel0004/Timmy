@@ -265,3 +265,16 @@ def test_weekly_http_failure_is_held_without_retry(workspace, monkeypatch):
             WorkflowRun.request_key == 'weekly:2026-W47:1'))
         assert marker.status == 'blocked'
         assert marker.snapshot['steps'][0]['issue_codes'] == ['SCHEDULED_HTTP_409']
+
+def test_unexecuted_validation_exposes_only_provisional_evidence(workspace):
+    c, h, _ = workspace
+    response = c.post('/api/workflows/runs', headers=h,
+                      json={'request_id': str(uuid4()), 'project_id': 1,
+                            'workflow_id': 'process_activity'})
+    assert response.status_code == 201
+    steps = response.json()['steps']
+    hold = next(row for row in steps if row['step'] == 'validate_activity')
+    assert hold['executed'] is False
+    assert hold['attempted'] is False
+    assert hold['structural_preview_only'] is True
+    assert hold['evidence_kind'] == 'provisional_structural_preview'
