@@ -20,6 +20,7 @@ from .documents import resolve_documents, project_report_cutoffs
 from .models import EvidenceReview, MappingProposal, StructuralValidation, WorkflowRun
 from .workflows import run_workflow, render_run, choose_workflow
 from .session_preview import escape
+from .workflow_state_machine import validate_state_change
 
 CONFIRM = re.compile(r'^(yes+s*|yess+|confirmed|confirm|ok(?:ay)?|proceed|continue|نعم|موافق|تم التأكيد)[.!\s]*$',re.I)
 MAPPING_CONFIRM = re.compile(r'^(?:column )?mappings? confirmed[.!\s]*(?:proceed)?[.!\s]*$',re.I)
@@ -50,7 +51,9 @@ def check_integrity(config, documents):
 
 
 def save_state(conversation, state):
-    # Assign a new JSON object so SQLAlchemy tracks every nested transition.
+    # Explicitly validate the persisted transition and its required companion
+    # fields. SQLAlchemy needs a fresh JSON object for nested changes.
+    validate_state_change(conversation.workflow_state, state)
     conversation.workflow_state=copy.deepcopy(state)
 
 
