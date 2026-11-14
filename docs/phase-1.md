@@ -23,3 +23,35 @@ Automatic verification uses a provisional Arabic/English header allowlist, requi
 - Set audit retention, backup/restore procedures, and requirements for any deployment beyond loopback.
 
 Domain tables are migration foundations. Expand them through revisions when these decisions are made.
+
+## Stored workflows and remaining adapters
+
+`workflow_knowledge.json` now defines brief-request procedures and their ordered
+steps. Chat and the Monday runner share `workflows.run_workflow`, scoped durable
+receipts, original-file integrity checks, and the same frozen report cutoffs.
+Migration 0012 adds workflow runs and protected chat request context. No existing
+database was migrated during implementation; apply the revision before starting
+the updated app. Shortcuts do not require a running model; less explicit requests
+can use a strictly typed model proposal. Unclear intent produces action choices.
+
+The weekly schedule is Monday 04:00 Asia/Beirut. The app must be running; a restart
+later on Monday catches up once. It does not backfill a missed Monday on Tuesday.
+The sole active account and all its permitted projects are used by default. With
+multiple active accounts an explicit actor is required. Rights are rechecked for
+every project; no administrator bypass or extra membership is inferred. Disable
+with TIMMY_WEEKLY_ENABLED=false. Multiple workers are deduplicated with SQLite
+transactions and a unique per-account/project/ISO-week run key. Review-state runs
+are recorded once; use a new explicit run request after correcting evidence.
+
+This is not completed production financial orchestration. Approved planning/
+staff-to-eligibility transitions, policy-resolution adapters, production credits,
+exact-batch approval and payment-request file export are still missing. The runner
+records each missing capability as a blocker, including the unperformed steps.
+A structural pass cannot produce credits or a payment file. Returned-payment
+reconciliation, mapping and archival need a trusted source and reviewed backend
+adapters; there is no automatic source watcher/provider registered yet. A brief
+reconciliation request starts the stored return workflow and records those
+blockers. Original uploads remain preserved. No payment-request email, transfer
+or external delivery is implemented or authorized; the coordinator sends files
+manually once a valid exporter exists. No automatic invalidation or fuzzy staff
+matching is introduced by these instructions.

@@ -145,6 +145,23 @@ class ChatTurn(Base):
     prompt: Mapped[str] = mapped_column(Text)
     reply: Mapped[str] = mapped_column(Text)
     created_at: Mapped[int]
+    context: Mapped[dict | None] = mapped_column(JSON)
+
+
+class WorkflowRun(Base):
+    __tablename__ = "workflow_runs"
+    __table_args__ = (UniqueConstraint("actor_id", "request_key"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    actor_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"), index=True)
+    request_key: Mapped[str] = mapped_column(String(160))
+    fingerprint: Mapped[str] = mapped_column(String(64))
+    workflow_id: Mapped[str] = mapped_column(String(80))
+    knowledge_version: Mapped[str] = mapped_column(String(40))
+    created_at: Mapped[int]
+    status: Mapped[str] = mapped_column(String(30))
+    snapshot: Mapped[dict] = mapped_column(JSON)
 
 
 user_roles = Table(

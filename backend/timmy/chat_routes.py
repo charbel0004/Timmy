@@ -6,7 +6,7 @@ from uuid import UUID, uuid4
 
 from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 
 from .ai import OllamaAdapter, OllamaExtractionError, build_ollama_client
@@ -16,6 +16,8 @@ from .chat import respond
 from .models import ChatTurn, Conversation
 from .auth import current_principal
 from .repositories import visible_projects
+from .workflows import run_workflow, render_run
+from .documents import project_report_cutoffs
 
 router = APIRouter(prefix="/api/chat/conversations")
 
@@ -61,18 +63,28 @@ def list_conversations(principal: Authenticated, db: Database):
     conversations = db.scalars(select(Conversation).where(
         Conversation.owner_id == principal.user.id,
     ).order_by(Conversation.id).limit(100))
-    return [history(db, item.id, limit=1) for item in conversations]
+    return [history(db, item.id, limit=1, principal=principal) for item in conversations]
 
 
-def history(db: Database, identifier: str, limit: int = 50):
+def history(db: Database, identifier: str, limit: int = 50, principal=None):
     turns = db.scalars(select(ChatTurn).where(ChatTurn.conversation_id == identifier)
                        .order_by(ChatTurn.id.desc()).limit(limit)).all()
-    return {"id": identifier, "title": db.get(Conversation, identifier).title, "messages": [message for turn in reversed(turns) for message in view(turn)]}
+    messages = []
+    for turn in reversed(turns):
+        pair = view(turn)
+        if principal and turn.context:
+            try:
+                resolve_documents(db, principal, identifier, turn.context['request'].get('project_id'),
+                                  turn.context.get('source_ids', []))
+            except HTTPException:
+                pair[1]['text'] = 'This result is unavailable under your current document permissions.'
+        messages.extend(pair)
+    return {"id": identifier, "title": db.get(Conversation, identifier).title, "messages": messages}
 
 
 @router.get("/{conversation_id}")
 def get_conversation(conversation_id: UUID, principal: Authenticated, db: Database):
-    return history(db, owned(db, principal, conversation_id).id)
+    return history(db, owned(db, principal, conversation_id).id, principal=principal)
 
 
 @router.delete("/{conversation_id}", status_code=204)
@@ -91,16 +103,20 @@ async def send(conversation_id: UUID, payload: SendMessage, request: Request, pr
     request_id = str(payload.request_id)
     query = select(ChatTurn).where(ChatTurn.conversation_id == identifier, ChatTurn.request_id == request_id)
 
+    request_context = payload.model_dump(mode='json', exclude={'request_id'})
+    documents = resolve_documents(db, principal, identifier, payload.project_id, payload.document_ids)
+    source_ids = [file.id for file, _ in documents]
+
     def replay(turn: ChatTurn):
-        if turn.prompt != payload.message:
+        if turn.prompt != payload.message or not turn.context or turn.context.get('request') != request_context:
             raise HTTPException(409, "Request identifier already used")
+        resolve_documents(db, principal, identifier, payload.project_id, turn.context.get('source_ids', []))
         return {"message": view(turn)[1]}
 
     if previous := db.scalar(query):
         return replay(previous)
-    resolve_documents(db, principal, identifier, payload.project_id, payload.document_ids)
     context = [{"role": item["role"], "content": item["text"][:1000]}
-               for item in history(db, identifier, limit=2)["messages"]]
+               for item in history(db, identifier, limit=2, principal=principal)["messages"]]
     db.rollback()
     config = request.app.state.config
     used_tool = False
@@ -125,7 +141,10 @@ async def send(conversation_id: UUID, payload: SendMessage, request: Request, pr
         import re
 
         if re.search(r"session|validate|eligib|payment policy|الجلسات|تحقق", payload.message, re.I):
-            result = session_preview(documents)
+            cutoffs = {}
+            for project in {file.project_id for file, _ in documents}:
+                cutoffs.update(project_report_cutoffs(db, project))
+            result = session_preview(documents, report_cutoffs=cutoffs)
             if result is not None:
                 return result
             return (
@@ -161,6 +180,21 @@ async def send(conversation_id: UUID, payload: SendMessage, request: Request, pr
         return "\n".join(lines)
 
 
+    def execute_workflow(workflow_id):
+        db.rollback()
+        db.execute(text('BEGIN IMMEDIATE'))
+        actor = current_principal(request, db)
+        owned(db, actor, conversation_id)
+        available = resolve_documents(db, actor, identifier, payload.project_id, payload.document_ids)
+        project_ids = {file.project_id for file, _ in available}
+        project_id = payload.project_id or (next(iter(project_ids)) if len(project_ids) == 1 else None)
+        if project_id is None:
+            return 'Select the project in Context so I can run the stored workflow. You do not need to specify its steps.'
+        run = run_workflow(db, actor, config, workflow_id=workflow_id, project_id=project_id,
+                           request_key=f'chat:{identifier}:{request_id}', conversation_id=identifier,
+                           document_ids=payload.document_ids)
+        return render_run(run)
+
     try:
         async with build_ollama_client(config) as client:
             reply, projects = await respond(
@@ -169,13 +203,15 @@ async def send(conversation_id: UUID, payload: SendMessage, request: Request, pr
                 lambda: visible_projects(db, owner),
                 record_tool,
                 document_summary,
+                execute_workflow,
             )
     except OllamaExtractionError as error:
         raise HTTPException(503, f"Local assistant unavailable ({error.code})") from None
     principal = current_principal(request, db)
     owned(db, principal, conversation_id)
     turn = ChatTurn(conversation_id=identifier, request_id=request_id, prompt=payload.message,
-                    reply="Spreadsheet inspection requested." if document_used else reply, created_at=int(time()))
+                    reply=reply, created_at=int(time()),
+                    context={"request": request_context, "source_ids": source_ids})
     db.add(turn)
     if used_tool:
         audit(db, "chat_tool_list_projects", owner)
@@ -207,4 +243,4 @@ def rename(conversation_id: UUID, payload: RenameConversation, request: Request,
     conversation = owned(db, principal, conversation_id)
     conversation.title = payload.title
     db.commit()
-    return history(db, str(conversation_id))
+    return history(db, str(conversation_id), principal=principal)

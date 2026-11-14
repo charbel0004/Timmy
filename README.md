@@ -33,6 +33,26 @@ curl -fsS http://localhost:8000/api/health
 
 See [Phase 1 architecture and open decisions](docs/phase-1.md).
 
+## Stored workflows
+
+Select a project in Context and use brief requests such as `Analyze`, `Process`,
+`Run weekly`, `Show flags`, or `Reconcile the payment report`. Procedures are
+stored in `backend/timmy/workflow_knowledge.json`; the user supplies the goal,
+not the steps. Analyze verifies already-uploaded intake and offers processing.
+Runs preserve evidence references and per-step outcomes. Missing authoritative
+validation, resolution and financial adapters remain explicit blockers.
+
+The app checks for its weekly run every Monday at 04:00 **Asia/Beirut** while
+running, using the sole active account and its permitted projects. It records
+one run per project/week and catches up if started later on Monday. Multiple
+active accounts require `TIMMY_WEEKLY_ACTOR_ID`; `TIMMY_WEEKLY_PROJECT_IDS` can
+restrict scope. Set `TIMMY_WEEKLY_ENABLED=false` to disable scheduling. Apply
+migration 0012 before starting the updated app. Payment requests are intended as
+files for the coordinator to send manually; the required approved-batch export
+adapter is not yet implemented, and no automatic external delivery occurs.
+
+See [workflow triggers and remaining integrations](docs/ai/WORKFLOW_TRIGGERS.md).
+
 ## Workspace administration
 
 Sign in with a locally provisioned admin account. Projects supports lifecycle

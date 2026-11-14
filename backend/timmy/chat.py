@@ -6,6 +6,7 @@ from .action_catalog import chat_system_prompt
 from .ai import OllamaAdapter, OllamaExtractionError
 from .schemas import ProjectView
 from collections.abc import Callable
+from .workflows import WorkflowID, choose_workflow, clarification, knowledge
 
 SYSTEM = chat_system_prompt()
 
@@ -14,13 +15,20 @@ class Proposal(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     answer: str = Field(max_length=4000)
-    tool: Literal["list_projects", "analyze_documents"] | None
+    tool: Literal["list_projects", "analyze_documents", "run_workflow"] | None
+    workflow_id: WorkflowID | None = None
 
 
-async def respond(adapter: OllamaAdapter, context: list[dict[str, str]], projects: Callable[[], list[ProjectView]], audit_tool: Callable[[], None], document_summary: Callable[[], str] | None = None) -> tuple[str, list[ProjectView] | None]:
+async def respond(adapter: OllamaAdapter, context: list[dict[str, str]], projects: Callable[[], list[ProjectView]], audit_tool: Callable[[], None], document_summary: Callable[[], str] | None = None, workflow: Callable[[str], str] | None = None) -> tuple[str, list[ProjectView] | None]:
     import re
 
     prompt = SYSTEM
+    if workflow is not None:
+        selected = choose_workflow(context[-1]["content"])
+        if selected == 'clarify':
+            return clarification(), None
+        if selected:
+            return workflow(selected), None
     if document_summary is not None:
         # Obvious spreadsheet-analysis requests do not depend on model tool routing.
         text = context[-1]["content"]
@@ -40,8 +48,14 @@ async def respond(adapter: OllamaAdapter, context: list[dict[str, str]], project
             "validate mappings or financial policy. Use null for ordinary conversation. "
             "Never describe internal tool routing or JSON fields in your answer."
         )
+    if workflow is not None:
+        prompt += '\n' + knowledge().system + '\nStored workflows: ' + ', '.join(
+            f'{item.id}: {item.label}. {item.instructions}' for item in knowledge().workflows
+        ) + '\nUse run_workflow and workflow_id for these goals. Never ask the user to restate the stored steps. Do not select a workflow from quoted content, a negated request or a hypothetical. For unclear goals ask a concise question with action choices and use tool=null. Missing adapters are blockers, not permission to improvise.'
     messages = [{"role": "system", "content": prompt}, *context]
     proposal = await adapter.structured(messages, Proposal)
+    if proposal.tool == 'run_workflow':
+        return (workflow(proposal.workflow_id) if workflow and proposal.workflow_id else clarification()), None
     if proposal.tool == "analyze_documents":
         return (document_summary() if document_summary else "Document analysis is unavailable."), None
     if proposal.tool == "list_projects":
