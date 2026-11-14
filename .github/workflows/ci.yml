@@ -1,0 +1,114 @@
+name: Agent Timmy CI
+
+on:
+  pull_request:
+    branches:
+      - main
+
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+
+  backend:
+    name: Backend and Database
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    env:
+      PYTHONPATH: backend
+      PYTHONDONTWRITEBYTECODE: "1"
+      TIMMY_DATABASE_URL: sqlite:///${{ runner.temp }}/timmy-ci.db
+      TIMMY_WEEKLY_ENABLED: "false"
+      TIMMY_DEMO_MODE: "false"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install Python 3.12
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install backend dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r backend/requirements-dev.txt
+
+      - name: Run backend tests
+        run: |
+          python -m pytest -q backend/tests \
+            -p no:cacheprovider \
+            --basetemp="${RUNNER_TEMP}/timmy-pytest"
+
+      - name: Apply database migrations
+        run: |
+          python -m alembic \
+            -c backend/alembic.ini upgrade head
+
+      - name: Verify database revision
+        run: |
+          python -m alembic \
+            -c backend/alembic.ini current
+
+      - name: Verify SQLite integrity
+        run: |
+          python - <<'PY'
+          import os
+          import sqlite3
+          from sqlalchemy.engine import make_url
+
+          url = make_url(os.environ["TIMMY_DATABASE_URL"])
+          path = url.database
+
+          with sqlite3.connect(path) as db:
+              result = db.execute("PRAGMA integrity_check").fetchone()[0]
+
+          assert result == "ok", result
+          print("SQLite integrity: OK")
+          PY
+
+  frontend:
+    name: Frontend Tests and Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install Node.js 22
+        uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          package-manager-cache: false
+
+      - name: Install frontend dependencies
+        run: npm ci --prefix frontend
+
+      - name: Run frontend tests
+        run: npm test --prefix frontend
+
+      - name: Build production frontend
+        env:
+          VITE_API_URL: /api
+        run: npm run build --prefix frontend
+
+      - name: Verify production output
+        run: |
+          test -s frontend/dist/index.html
+          test -d frontend/dist/assets
+          echo "Frontend build verified."
