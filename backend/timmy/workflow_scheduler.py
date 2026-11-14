@@ -24,21 +24,11 @@ def run_due(engine, config, now=None):
         return []
     year, week, _ = local.isocalendar()
     recorded = []
-    with Session(engine) as db:
-        candidates = list(db.scalars(select(User).where(User.active.is_(True), User.must_change_password.is_(False))))
-        actor_id = config.weekly_actor_id
-        if actor_id is None:
-            if len(candidates) != 1:
-                logger.warning('Weekly run requires exactly one active main account or an explicit actor')
-                return []
-            actor_id = candidates[0].id
-        user = db.get(User, actor_id)
-        role = db.get(Role, user.role_id) if user and user.active else None
-        if not role or user.must_change_password:
-            return []
-        principal = principal_for(db, user, role.name, None)
-        project_ids = config.weekly_project_ids or [key for key, permissions in principal.project_permissions.items() if 'timesheets.view' in permissions]
-    for project_id in sorted(set(project_ids)):
+    actor_id = config.weekly_actor_id
+    if actor_id is None or not config.weekly_project_ids:
+        logger.warning("Weekly run requires an explicit actor and project list")
+        return []
+    for project_id in sorted(set(config.weekly_project_ids)):
         with Session(engine) as db:
             db.execute(text('BEGIN IMMEDIATE'))
             user = db.get(User, actor_id)

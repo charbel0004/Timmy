@@ -42,11 +42,10 @@ not the steps. Analyze verifies already-uploaded intake and offers processing.
 Runs preserve evidence references and per-step outcomes. Missing authoritative
 validation, resolution and financial adapters remain explicit blockers.
 
-The app checks for its weekly run every Monday at 04:00 **Asia/Beirut** while
-running, using the sole active account and its permitted projects. It records
-one run per project/week and catches up if started later on Monday. Multiple
-active accounts require `TIMMY_WEEKLY_ACTOR_ID`; `TIMMY_WEEKLY_PROJECT_IDS` can
-restrict scope. Set `TIMMY_WEEKLY_ENABLED=false` to disable scheduling. Apply
+Weekly scheduling is off by default. To enable it, set
+`TIMMY_WEEKLY_ENABLED=true`, an authorized `TIMMY_WEEKLY_ACTOR_ID`, and an
+explicit `TIMMY_WEEKLY_PROJECT_IDS` list. It runs once per project on Mondays
+at 04:00 Asia/Beirut and catches up later that Monday. Apply
 migration 0012 before starting the updated app. Payment requests are intended as
 files for the coordinator to send manually; the required approved-batch export
 adapter is not yet implemented, and no automatic external delivery occurs.

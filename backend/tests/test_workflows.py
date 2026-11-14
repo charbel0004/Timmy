@@ -135,11 +135,12 @@ def test_monday_schedule_uses_beirut_time_and_deduplicates(workspace):
     config.weekly_enabled = True
     config.weekly_actor_id = None
     config.weekly_project_ids = []
-    # Main-account discovery must fail closed while several test users are active.
+    # Missing identity or project scope must fail closed.
     due = datetime(2026,11,16,2,0,tzinfo=timezone.utc) # 04:00 Beirut
     assert run_due(c.app.state.engine,config,due) == []
-    with Session(c.app.state.engine) as db,db.begin():
-        db.execute(update(User).where(User.id != 99).values(active=False))
+    config.weekly_actor_id = 99
+    assert run_due(c.app.state.engine, config, due) == []
+    config.weekly_project_ids = [1]
     assert run_due(c.app.state.engine,config,datetime(2026,11,16,1,59,tzinfo=timezone.utc)) == []
     ids = run_due(c.app.state.engine,config,due)
     assert len(ids) == 1
@@ -178,6 +179,7 @@ def test_scheduler_disabled_and_summer_local_time(workspace):
     c,_,_ = workspace
     config=c.app.state.config
     config.weekly_actor_id=99
+    config.weekly_project_ids=[1]
     config.weekly_enabled=False
     summer_due=datetime(2026,7,6,1,0,tzinfo=timezone.utc) # 04:00 in DST
     assert run_due(c.app.state.engine,config,summer_due)==[]
