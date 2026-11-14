@@ -213,6 +213,34 @@ class WorkflowRun(Base):
     snapshot: Mapped[dict] = mapped_column(JSON)
 
 
+
+
+class WorkflowStepReceipt(Base):
+    """Immutable outcome record for a committed workflow run.
+
+    All protected activity, planning and source changes still commit in the same
+    caller transaction. This table does not claim an independent pre-invocation
+    crash checkpoint for future external side effects.
+    """
+    __tablename__ = "workflow_step_receipts"
+    __table_args__ = (
+        UniqueConstraint("run_id", "step_index"),
+        CheckConstraint("step_index >= 0", name="ck_workflow_step_index"),
+        CheckConstraint("status IN ('completed','needs_review','blocked','failed')",
+                        name="ck_workflow_step_status"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    run_id: Mapped[int] = mapped_column(ForeignKey("workflow_runs.id"), index=True)
+    step_index: Mapped[int]
+    step_id: Mapped[str] = mapped_column(String(80))
+    status: Mapped[str] = mapped_column(String(30))
+    attempted: Mapped[bool]
+    executed: Mapped[bool]
+    blocked_by: Mapped[str | None] = mapped_column(String(80))
+    issue_codes: Mapped[list] = mapped_column(JSON)
+    recorded_at: Mapped[int]
+
 user_roles = Table(
     "user_roles", metadata,
     Column("user_id", ForeignKey("users.id"), primary_key=True),

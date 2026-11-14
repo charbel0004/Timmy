@@ -20,7 +20,7 @@ from sqlalchemy import select, text
 from .audit import audit
 from .auth import Authenticated, Database, current_principal, require_csrf
 from .documents import project_report_cutoffs, resolve_documents
-from .models import WorkflowRun, projects
+from .models import WorkflowRun, WorkflowStepReceipt, projects
 from .session_preview import preview
 from .workflow_graph import execute_graph
 
@@ -237,6 +237,17 @@ def run_workflow(db, principal, config, *, workflow_id, project_id, request_key,
                                 'preview': result_text if workflow_id in {'process_activity', 'show_issues'} else None})
     db.add(run)
     db.flush()
+    # Persist typed step receipts in the SAME SQLite transaction as the run
+    # and planning preflight. Never let a receipt outlive an uncommitted action.
+    for index, result in enumerate(results):
+        db.add(WorkflowStepReceipt(
+            run_id=run.id, step_index=index, step_id=result['step'],
+            status=result['status'], attempted=bool(result.get('attempted', True)),
+            executed=bool(result.get('executed', False)),
+            blocked_by=result.get('blocked_by'),
+            issue_codes=result['issue_codes'], recorded_at=int(time()),
+        ))
+    db.flush()
     audit(db, 'workflow_run_recorded', principal.user.id, resource_type='workflow_run',
           resource_id=str(run.id), outcome=status, trigger=workflow_id)
     return run
@@ -283,6 +294,57 @@ def start(payload: RunRequest, request: Request, principal: Authenticated, db: D
                        project_id=payload.project_id, request_key=f'api:{payload.request_id}')
     db.commit()
     return {'id': run.id, 'status': run.status, 'steps': run.snapshot['steps']}
+
+
+class ResumeRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    request_id: UUID
+    document_ids: list[UUID] | None = Field(default=None, max_length=20)
+
+
+@router.post('/runs/{run_id}/resume', status_code=201)
+def resume_run(run_id: int, body: ResumeRequest, request: Request,
+               principal: Authenticated, db: Database):
+    """Explicit human-driven revalidation linked to the original held run.
+
+    A continuation creates a new immutable receipt set after fresh scope and
+    authority checks. It never retries an uncertain side effect; future
+    financial handlers must have their own separately approved resume protocol.
+    """
+    require_csrf(request, principal)
+    db.rollback()
+    db.execute(text('BEGIN IMMEDIATE'))
+    principal = current_principal(request, db)
+    require_csrf(request, principal)
+    original = db.get(WorkflowRun, run_id)
+    if original is None or original.actor_id != principal.user.id:
+        raise HTTPException(404, 'Workflow run unavailable')
+    principal.require('timesheets.view', original.project_id)
+    if original.workflow_id != 'show_issues':
+        principal.require('projects:manage')
+    if original.status not in {'blocked', 'needs_review', 'failed'}:
+        raise HTTPException(409, 'Only halted workflows can be continued')
+    key = f'resume:{body.request_id}'
+    replay = db.scalar(select(WorkflowRun).where(
+        WorkflowRun.actor_id == principal.user.id, WorkflowRun.request_key == key))
+    if replay and replay.snapshot.get('resumed_from_run_id') != original.id:
+        raise HTTPException(409, 'Resume identifier already used for another run')
+    selected = (body.document_ids if body.document_ids is not None
+                else original.snapshot.get('source_ids', []))
+    run = run_workflow(
+        db, principal, request.app.state.config,
+        workflow_id=original.workflow_id, project_id=original.project_id,
+        request_key=key, document_ids=selected,
+    )
+    if replay is None:
+        run.snapshot = {**run.snapshot, 'resumed_from_run_id': original.id,
+                        'resume_mode': 'fresh_evidence_revalidation'}
+        audit(db, 'workflow_run_continued', principal.user.id,
+              resource_type='workflow_run', resource_id=str(run.id),
+              outcome=run.status, trigger=original.workflow_id)
+    db.commit()
+    return {'id': run.id, 'status': run.status, 'steps': run.snapshot['steps'],
+            'resumed_from_run_id': original.id}
 
 
 @router.get('/last-run/{project_id}')

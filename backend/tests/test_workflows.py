@@ -279,3 +279,51 @@ def test_unexecuted_validation_exposes_only_provisional_evidence(workspace):
     assert hold['attempted'] is False
     assert hold['structural_preview_only'] is True
     assert hold['evidence_kind'] == 'provisional_structural_preview'
+
+def test_workflow_step_receipts_are_committed_and_scoped(workspace):
+    from timmy.models import WorkflowStepReceipt
+    c,h,_ = workspace
+    response=c.post('/api/workflows/runs',headers=h,json={
+        'request_id':str(uuid4()),'project_id':1,'workflow_id':'weekly_cycle'})
+    assert response.status_code==201,response.text
+    run_id=response.json()['id']
+    with Session(c.app.state.engine) as db:
+        rows=list(db.scalars(select(WorkflowStepReceipt).where(
+            WorkflowStepReceipt.run_id==run_id).order_by(WorkflowStepReceipt.step_index)))
+        assert len(rows)==len(response.json()['steps'])
+        assert [row.step_id for row in rows]==[row['step'] for row in response.json()['steps']]
+        assert all(not row.executed for row in rows[1:])
+        assert rows[1].blocked_by=='check_planning'
+
+
+def test_manual_continuation_is_new_immutable_run_and_no_finance(workspace):
+    c,h,_=workspace
+    response=c.post('/api/workflows/runs',headers=h,json={
+        'request_id':str(uuid4()),'project_id':1,'workflow_id':'weekly_cycle'})
+    original=response.json()['id']
+    key=str(uuid4())
+    route=f'/api/workflows/runs/{original}/resume'
+    resumed=c.post(route,headers=h,json={'request_id':key})
+    assert resumed.status_code==201,resumed.text
+    body=resumed.json()
+    assert body['id'] != original
+    assert body['resumed_from_run_id']==original
+    assert body['steps'][-1]['executed'] is False
+    assert c.post(route,headers=h,json={'request_id':key}).json() == body
+    with Session(c.app.state.engine) as db:
+        previous=db.get(WorkflowRun,original)
+        assert previous.snapshot.get('resumed_from_run_id') is None
+        current=db.get(WorkflowRun,body['id'])
+        assert current.snapshot['resumed_from_run_id']==original
+        assert current.snapshot['resume_mode']=='fresh_evidence_revalidation'
+    assert c.post(route,headers=ORIGIN,json={'request_id':str(uuid4())}).status_code==403
+
+
+def test_cannot_resume_completed_intake_or_cross_parent(workspace):
+    c,h,_=workspace
+    first=c.post('/api/workflows/runs',headers=h,json={
+        'request_id':str(uuid4()),'project_id':1,'workflow_id':'analyze_intake'})
+    assert first.json()['status']=='completed'
+    denied=c.post(f"/api/workflows/runs/{first.json()['id']}/resume",
+                  headers=h,json={'request_id':str(uuid4())})
+    assert denied.status_code==409
