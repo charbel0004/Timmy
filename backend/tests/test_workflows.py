@@ -217,3 +217,51 @@ def test_workflow_endpoints_require_scope_and_csrf(workspace):
     assert c.post('/api/workflows/runs',headers=h,json=payload|{'workflow_id':'approve_payment'}).status_code==422
     c.post('/api/auth/login',headers=ORIGIN,json={'username':'unknown','password':PASSWORD})
     assert c.get('/api/workflows/last-run/1').status_code==403
+
+def test_failed_weekly_handler_is_recorded_and_not_retried(workspace, monkeypatch):
+    from timmy import workflow_scheduler
+    c, _, _ = workspace
+    config = c.app.state.config
+    config.weekly_enabled = True
+    config.weekly_actor_id = 99
+    config.weekly_project_ids = [1]
+    attempts = []
+
+    def fails_once(*args, **kwargs):
+        attempts.append(kwargs['request_key'])
+        raise ValueError('sensitive input must not be logged or persisted')
+
+    monkeypatch.setattr(workflow_scheduler, 'run_workflow', fails_once)
+    due = datetime(2026, 11, 16, 2, 0, tzinfo=timezone.utc)
+    assert workflow_scheduler.run_due(c.app.state.engine, config, due) == []
+    assert workflow_scheduler.run_due(c.app.state.engine, config, due) == []
+    assert len(attempts) == 1
+    with Session(c.app.state.engine) as db:
+        marker = db.scalar(select(WorkflowRun).where(WorkflowRun.request_key == attempts[0]))
+        assert marker.status == 'failed'
+        assert marker.snapshot['steps'][0]['issue_codes'] == ['SCHEDULED_EXECUTION_FAILED']
+        assert 'sensitive input' not in str(marker.snapshot)
+
+
+def test_weekly_http_failure_is_held_without_retry(workspace, monkeypatch):
+    from fastapi import HTTPException
+    from timmy import workflow_scheduler
+    c, _, _ = workspace
+    config = c.app.state.config
+    config.weekly_enabled = True
+    config.weekly_actor_id = 99
+    config.weekly_project_ids = [1]
+    attempts = []
+    def rejects(*args, **kwargs):
+        attempts.append(1)
+        raise HTTPException(409, 'untrusted details')
+    monkeypatch.setattr(workflow_scheduler, 'run_workflow', rejects)
+    due = datetime(2026, 11, 16, 2, 0, tzinfo=timezone.utc)
+    workflow_scheduler.run_due(c.app.state.engine, config, due)
+    workflow_scheduler.run_due(c.app.state.engine, config, due)
+    assert attempts == [1]
+    with Session(c.app.state.engine) as db:
+        marker = db.scalar(select(WorkflowRun).where(
+            WorkflowRun.request_key == 'weekly:2026-W47:1'))
+        assert marker.status == 'blocked'
+        assert marker.snapshot['steps'][0]['issue_codes'] == ['SCHEDULED_HTTP_409']

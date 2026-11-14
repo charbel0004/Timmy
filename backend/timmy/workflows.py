@@ -112,6 +112,11 @@ def run_workflow(db, principal, config, *, workflow_id, project_id, request_key,
             damaged |= len(data) != file.size_bytes or sha256(data).hexdigest() != file.sha256
         except OSError:
             damaged = True
+    # A request-key replay is checked BEFORE any planning source registration.
+    # The existing input fingerprint is still recomputed below; preflight changes
+    # on a replay are confined to a rolled-back SQLite savepoint.
+    previous = db.scalar(select(WorkflowRun).where(
+        WorkflowRun.actor_id == principal.user.id, WorkflowRun.request_key == request_key))
     planning_receipts=[]
     preflight_issues=[]
     if prepared_documents is None and not damaged and documents and workflow_id in {'weekly_cycle','process_activity'}:
@@ -123,9 +128,12 @@ def run_workflow(db, principal, config, *, workflow_id, project_id, request_key,
             preflight_issues=['MAPPING_CONFIRMATION_REQUIRED']
         else:
             try:
-                with db.begin_nested():
+                with db.begin_nested() as savepoint:
                     prepared_documents,planning_receipts=register_planning(db,principal,
                         mapped_documents(documents,accepted),accepted,None)
+                    if previous is not None:
+                        # Replay cannot register planning rows or audit changes.
+                        savepoint.rollback()
                 mapping_ref='formats:'+sha256(json.dumps(sorted({s['verified_format_ref'] for s in accepted})).encode()).hexdigest()
             except HTTPException as error:
                 preflight_issues=['PLANNING_REGISTRATION_BLOCKED: '+str(error.detail)]
@@ -141,8 +149,6 @@ def run_workflow(db, principal, config, *, workflow_id, project_id, request_key,
     if workflow_id != 'analyze_intake':
         signature['project_code_scope'] = project_codes.get(project_id)
     fingerprint = sha256(json.dumps(signature, sort_keys=True).encode()).hexdigest()
-    previous = db.scalar(select(WorkflowRun).where(WorkflowRun.actor_id == principal.user.id,
-                                                  WorkflowRun.request_key == request_key))
     if previous:
         if previous.fingerprint != fingerprint:
             raise HTTPException(409, 'Run key already used with different scope or evidence')

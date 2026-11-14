@@ -1,6 +1,8 @@
 """Monday 04:00 Asia/Beirut; explicit identity/scope and once-per-week receipts."""
 import asyncio
 import logging
+from hashlib import sha256
+from time import time
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
@@ -10,9 +12,40 @@ from sqlalchemy.orm import Session
 
 from .auth import principal_for
 from .models import Role, User, WorkflowRun
-from .workflows import run_workflow
+from .audit import audit
+from .workflows import run_workflow, knowledge
 
 logger = logging.getLogger(__name__)
+
+
+def persist_failed_attempt(db, *, actor_id: int, project_id: int,
+                           request_key: str, code: str, status: str) -> None:
+    """Persist a failed schedule key so the next poll cannot retry its handler.
+
+    The original workflow transaction MUST be rolled back before this call.
+    Store only safe codes; never serialize exception messages or source rows.
+    """
+    db.execute(text("BEGIN IMMEDIATE"))
+    existing = db.scalar(select(WorkflowRun.id).where(
+        WorkflowRun.actor_id == actor_id, WorkflowRun.request_key == request_key))
+    if existing is not None:
+        return
+    marker = WorkflowRun(
+        actor_id=actor_id, project_id=project_id, request_key=request_key,
+        fingerprint=sha256(request_key.encode()).hexdigest(),
+        workflow_id="weekly_cycle", knowledge_version=knowledge().version,
+        created_at=int(time()), status=status,
+        snapshot={"source_ids": [], "steps": [{
+            "step": "scheduler_preflight", "status": status,
+            "issue_codes": [code], "attempted": True, "executed": False,
+        }], "execution": {"mode": "scheduled", "attempt_status": "operator_required"}},
+    )
+    db.add(marker)
+    db.flush()
+    audit(db, "scheduled_workflow_failed", actor_id,
+          resource_type="workflow_run", resource_id=str(marker.id), outcome=status,
+          trigger="weekly_cycle")
+    db.commit()
 
 
 def run_due(engine, config, now=None):
@@ -51,7 +84,18 @@ def run_due(engine, config, now=None):
                 recorded.append(run.id)
             except HTTPException as error:
                 db.rollback()
-                logger.warning('Weekly project %s blocked (HTTP %s)', project_id, error.status_code)
+                persist_failed_attempt(db, actor_id=user.id, project_id=project_id,
+                                       request_key=key, code=f'SCHEDULED_HTTP_{error.status_code}',
+                                       status='blocked')
+                logger.warning('Weekly project %s stopped (HTTP %s); manual review required',
+                               project_id, error.status_code)
+            except Exception as error:
+                db.rollback()
+                persist_failed_attempt(db, actor_id=user.id, project_id=project_id,
+                                       request_key=key, code='SCHEDULED_EXECUTION_FAILED',
+                                       status='failed')
+                logger.error('Weekly project %s stopped; error_type=%s; manual review required',
+                             project_id, type(error).__name__)
     return recorded
 
 
@@ -59,7 +103,10 @@ async def scheduler_loop(engine, config):
     while True:
         try:
             await asyncio.to_thread(run_due, engine, config)
-        except Exception:
-            # Keep the scheduler alive without logging evidence/credential values.
-            logger.error('Weekly workflow check failed; inspect run receipts and configuration')
+        except Exception as error:
+            # Without durable DB receipts, retrying on the next poll is unsafe.
+            # Halt this scheduler process until operator inspection/restart.
+            logger.error('Weekly scheduler halted; error_type=%s; manual intervention required',
+                         type(error).__name__)
+            return
         await asyncio.sleep(30)
