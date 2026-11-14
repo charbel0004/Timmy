@@ -94,11 +94,11 @@ def describe(file, record, *, workflow_run_id=None):
     )
 
 
-def scoped_documents(db, principal, conversation_id=None):
+def scoped_documents(db, principal, conversation_id=None, *, purpose='timesheet'):
     allowed = [key for key, permissions in principal.project_permissions.items() if "timesheets.view" in permissions]
     own = select(Conversation.id).where(Conversation.owner_id == principal.user.id)
     query = select(StoredFile, DocumentImport).join(DocumentImport).where(
-        StoredFile.purpose == 'timesheet',
+        StoredFile.purpose == purpose,
         StoredFile.project_id.in_(allowed),
         or_((DocumentImport.conversation_id.is_(None)) & (StoredFile.uploaded_by == principal.user.id), DocumentImport.conversation_id.in_(own)),
     )
@@ -226,7 +226,15 @@ async def upload(request: Request, principal: Authenticated, db: Database, proje
 def download(file_id: UUID, request: Request, principal: Authenticated, db: Database):
     from urllib.parse import quote
 
-    row = db.execute(scoped_documents(db, principal).where(StoredFile.id == str(file_id))).one_or_none()
+    # Do not mix financial returns into timesheet discovery. Explicitly scoped
+    # download still works for a payment-return evidence owner.
+    candidate = db.get(StoredFile, str(file_id))
+    if candidate is None or candidate.purpose not in {'timesheet', 'payment_return'}:
+        raise HTTPException(404, "Document unavailable")
+    if candidate.purpose == 'payment_return':
+        principal.require('payments.view', candidate.project_id)
+    row = db.execute(scoped_documents(db, principal, purpose=candidate.purpose)
+                     .where(StoredFile.id == str(file_id))).one_or_none()
     if row is None:
         raise HTTPException(404, "Document unavailable")
     file, _ = row

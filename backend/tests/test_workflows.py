@@ -372,3 +372,16 @@ def test_generic_timesheet_upload_never_triggers_payment_return(workspace):
     with Session(c.app.state.engine) as db:
         assert db.scalar(select(WorkflowRun).where(
             WorkflowRun.workflow_id=='payment_return')) is None
+
+def test_payment_return_download_is_permission_scoped(workspace):
+    c,h,conv=workspace
+    result=c.post('/api/documents',
+        params={'filename':'return.csv','project_id':1,
+                'purpose':'payment_return','conversation_id':conv},
+        content=b'ref,status\nSYNTHETIC,pending\n',
+        headers=h|{'Content-Type':'text/csv'})
+    assert result.status_code==201,result.text
+    file_id=result.json()['id']
+    downloaded=c.get(f'/api/documents/{file_id}/download')
+    assert downloaded.status_code==200
+    assert downloaded.content==b'ref,status\nSYNTHETIC,pending\n'
