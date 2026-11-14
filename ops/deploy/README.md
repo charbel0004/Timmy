@@ -100,29 +100,25 @@ The shared directory and child private directories must be `timmy:timmy` and mod
 
 ### 7. Activate the first release manually
 
-After verifying schema revision matches:
-
-```bash
-sha=$(git -C /root/apps/Timmy rev-parse HEAD)
-ln -s "/srv/timmy/releases/$sha" /srv/timmy/current
-```
-
-Change only these two fields in `/etc/systemd/system/timmy-api.service`:
+After verifying schema revision matches, change only these two fields in `/etc/systemd/system/timmy-api.service`:
 
 ```ini
 WorkingDirectory=/srv/timmy/current
 ExecStart=/srv/timmy/current/.venv/bin/uvicorn timmy.main:app --app-dir backend --host 127.0.0.1 --port 8000
 ```
 
-Keep `User=timmy`, `Group=timmy`, and existing sandboxing. Then:
+Keep `User=timmy`, `Group=timmy`, and existing sandboxing. **Do not manually create the `current` symlink**: that would leave a writable staged release running in production. Instead use the root-owned activation program, which locks down the staged release before switching it:
 
 ```bash
+sha=$(git -C /root/apps/Timmy rev-parse HEAD)
 systemctl daemon-reload
-systemctl enable --now timmy-api
+systemctl enable timmy-api
+/usr/local/sbin/timmy-activate-release "$sha"
+systemctl is-active timmy-api
 curl -fsS http://127.0.0.1:8000/api/health
 ```
 
-If health fails, restore the old systemd unit and stop. **Do not enable CD.**
+If health fails on first activation, there is no prior release for automated rollback. Restore the old systemd unit, inspect logs and stop. **Do not enable CD.**
 
 Once API checks pass, switch only the static Nginx web root (current Nginx uses `/var/www/timmy`):
 
