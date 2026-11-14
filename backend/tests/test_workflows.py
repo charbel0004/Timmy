@@ -327,3 +327,48 @@ def test_cannot_resume_completed_intake_or_cross_parent(workspace):
     denied=c.post(f"/api/workflows/runs/{first.json()['id']}/resume",
                   headers=h,json={'request_id':str(uuid4())})
     assert denied.status_code==409
+
+def test_typed_payment_return_upload_triggers_unverified_reconciliation_hold(workspace):
+    c,h,conv=workspace
+    data=b'batch,reference,result\nSYNTHETIC,EXAMPLE,pending\n'
+    uploaded=c.post('/api/documents',
+        params={'filename':'synthetic-return.csv','project_id':1,
+                'purpose':'payment_return','conversation_id':conv},
+        content=data,headers=h|{'Content-Type':'text/csv'})
+    assert uploaded.status_code==201,uploaded.text
+    body=uploaded.json()
+    assert body['status']=='PAYMENT_RETURN_RECEIVED_UNVERIFIED'
+    assert isinstance(body['workflow_run_id'],int)
+    with Session(c.app.state.engine) as db:
+        run=db.get(WorkflowRun,body['workflow_run_id'])
+        assert run.workflow_id=='payment_return'
+        assert run.status=='blocked'
+        assert run.request_key=='payment_return:upload:'+body['id']
+        assert run.snapshot['payment_return_file_id']==body['id']
+        first,second=run.snapshot['steps'][:2]
+        assert first['step']=='receive_payment_report'
+        assert first['status']=='completed'
+        assert first['authority']=='UNVERIFIED_UPLOAD_ONLY'
+        assert 'TRUSTED_PAYMENT_REPORT_ADAPTER_REQUIRED' in second['issue_codes']
+        assert not any(s.get('status')=='completed' for s in run.snapshot['steps'][1:])
+    visible=c.get('/api/documents',params={'conversation_id':conv})
+    assert visible.status_code==200
+    assert body['id'] not in [row['id'] for row in visible.json()]
+    from timmy.models import payment_batches
+    with Session(c.app.state.engine) as db:
+        assert db.scalar(select(payment_batches.c.id).limit(1)) is None
+
+
+def test_generic_timesheet_upload_never_triggers_payment_return(workspace):
+    c,h,conv=workspace
+    with Session(c.app.state.engine) as db:
+        assert db.scalar(select(WorkflowRun).where(
+            WorkflowRun.workflow_id=='payment_return')) is None
+    result=c.post('/api/documents',
+        params={'filename':'generic.csv','project_id':1,'conversation_id':conv},
+        content=b'a,b\n1,2\n',headers=h|{'Content-Type':'text/csv'})
+    assert result.status_code==201,result.text
+    assert result.json()['workflow_run_id'] is None
+    with Session(c.app.state.engine) as db:
+        assert db.scalar(select(WorkflowRun).where(
+            WorkflowRun.workflow_id=='payment_return')) is None

@@ -30,6 +30,7 @@ class DocumentView(BaseModel):
     sha256: str
     rows: int
     status: str = "PARSED_MAPPING_REQUIRED"
+    workflow_run_id: int | None = None
 
 
 def parse(data: bytes, extension: str):
@@ -83,15 +84,21 @@ def parse(data: bytes, extension: str):
     return sheets, count
 
 
-def describe(file, record):
-    return DocumentView(id=file.id, project_id=file.project_id, filename=file.original_filename,
-                        sha256=file.sha256, rows=record.row_count)
+def describe(file, record, *, workflow_run_id=None):
+    return DocumentView(
+        id=file.id, project_id=file.project_id, filename=file.original_filename,
+        sha256=file.sha256, rows=record.row_count,
+        status=('PAYMENT_RETURN_RECEIVED_UNVERIFIED' if file.purpose == 'payment_return'
+                else 'PARSED_MAPPING_REQUIRED'),
+        workflow_run_id=workflow_run_id,
+    )
 
 
 def scoped_documents(db, principal, conversation_id=None):
     allowed = [key for key, permissions in principal.project_permissions.items() if "timesheets.view" in permissions]
     own = select(Conversation.id).where(Conversation.owner_id == principal.user.id)
     query = select(StoredFile, DocumentImport).join(DocumentImport).where(
+        StoredFile.purpose == 'timesheet',
         StoredFile.project_id.in_(allowed),
         or_((DocumentImport.conversation_id.is_(None)) & (StoredFile.uploaded_by == principal.user.id), DocumentImport.conversation_id.in_(own)),
     )
@@ -124,11 +131,15 @@ MEDIA = {
 
 @router.post("", status_code=201, response_model=DocumentView)
 async def upload(request: Request, principal: Authenticated, db: Database, project_id: int,
-                 filename: str, conversation_id: UUID | None = None):
+                 filename: str, conversation_id: UUID | None = None,
+                 purpose: Literal['timesheet', 'payment_return'] = 'timesheet'):
     require_csrf(request, principal)
     # Workspace managers can ingest documents only in projects they can read.
     principal.require("projects:manage")
     principal.require("timesheets.view", project_id)
+    if purpose == 'payment_return':
+        # Reuse existing privileges; no financial write permission is granted.
+        principal.require("payments.view", project_id)
     identifier = str(conversation_id) if conversation_id else None
     conversation_owned(db, principal, identifier)
     if db.scalar(select(projects.c.status).where(projects.c.id == project_id)) != "active":
@@ -158,6 +169,9 @@ async def upload(request: Request, principal: Authenticated, db: Database, proje
     principal = current_principal(request, db)
     principal.require("projects:manage")
     principal.require("timesheets.view", project_id)
+    if purpose == 'payment_return':
+        # Reuse existing privileges; no financial write permission is granted.
+        principal.require("payments.view", project_id)
     require_csrf(request, principal)
     conversation_owned(db, principal, identifier)
     if db.scalar(select(projects.c.status).where(projects.c.id == project_id)) != "active":
@@ -176,7 +190,7 @@ async def upload(request: Request, principal: Authenticated, db: Database, proje
         except BaseException:
             path.unlink(missing_ok=True)
             raise
-    file = StoredFile(id=file_id, purpose="timesheet", original_filename=filename, relative_storage_key=file_id,
+    file = StoredFile(id=file_id, purpose=purpose, original_filename=filename, relative_storage_key=file_id,
                       sha256=sha256(data).hexdigest(), size_bytes=len(data), mime_type=media,
                       uploaded_at=datetime.now(timezone.utc).isoformat(), project_id=project_id, uploaded_by=principal.user.id)
     record = DocumentImport(file_id=file_id, conversation_id=identifier, sheets=sheets, row_count=count)
@@ -185,13 +199,27 @@ async def upload(request: Request, principal: Authenticated, db: Database, proje
         db.flush()
         db.add(record)
         audit(db, "document_uploaded", principal.user.id, resource_type="stored_file", resource_id=file_id,
-              evidence_file_id=file_id, outcome="parsed_mapping_required")
+              evidence_file_id=file_id, outcome=("payment_return_received_unverified"
+                                                if purpose == "payment_return"
+                                                else "parsed_mapping_required"))
+        triggered_run = None
+        if purpose == 'payment_return':
+            # Source bytes, upload metadata and trigger commit atomically.
+            # Reconciliation stays blocked pending trusted source contract.
+            from .workflows import run_workflow
+            triggered_run = run_workflow(
+                db, principal, request.app.state.config,
+                workflow_id='payment_return', project_id=project_id,
+                request_key=f'payment_return:upload:{file_id}',
+                payment_return_file_id=file_id,
+            )
         db.commit()
     except Exception:
         db.rollback()
         path.unlink(missing_ok=True)
         raise
-    return describe(file, record)
+    return describe(file, record,
+                    workflow_run_id=triggered_run.id if triggered_run else None)
 
 
 @router.get("/{file_id}/download")

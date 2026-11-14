@@ -20,7 +20,7 @@ from sqlalchemy import select, text
 from .audit import audit
 from .auth import Authenticated, Database, current_principal, require_csrf
 from .documents import project_report_cutoffs, resolve_documents
-from .models import WorkflowRun, WorkflowStepReceipt, projects
+from .models import WorkflowRun, WorkflowStepReceipt, StoredFile, projects
 from .session_preview import preview
 from .workflow_graph import execute_graph
 
@@ -88,7 +88,8 @@ def step_result(step, status, issues=(), **data):
 
 
 def run_workflow(db, principal, config, *, workflow_id, project_id, request_key,
-                 conversation_id=None, document_ids=(), prepared_documents=None, mapping_ref=None, structural_snapshot=None):
+                 conversation_id=None, document_ids=(), prepared_documents=None, mapping_ref=None,
+                 structural_snapshot=None, payment_return_file_id=None):
     """Shared entry for chat and authenticated weekly/event automation.
 
     The caller owns the transaction. No delivery provider, approval or external
@@ -103,7 +104,18 @@ def run_workflow(db, principal, config, *, workflow_id, project_id, request_key,
         principal.require('projects:manage')
     if db.scalar(select(projects.c.status).where(projects.c.id == project_id)) != 'active':
         raise HTTPException(409, 'Select an active project')
-    documents = resolve_documents(db, principal, conversation_id, project_id, document_ids)
+    if payment_return_file_id is not None and workflow_id != 'payment_return':
+        raise HTTPException(422, 'Payment-return evidence cannot be used for another workflow')
+    payment_file = None
+    if payment_return_file_id is not None:
+        principal.require('payments.view', project_id)
+        payment_file = db.get(StoredFile, str(payment_return_file_id))
+        if (payment_file is None or payment_file.project_id != project_id
+                or payment_file.purpose != 'payment_return'):
+            raise HTTPException(404, 'Payment return unavailable')
+    # Payment-return evidence never enters ordinary timesheet selection.
+    documents = ([] if workflow_id == 'payment_return'
+                 else resolve_documents(db, principal, conversation_id, project_id, document_ids))
     # Validate original bytes before trusting cached parsed claims.
     damaged = False
     for file, _ in documents:
@@ -117,6 +129,13 @@ def run_workflow(db, principal, config, *, workflow_id, project_id, request_key,
     # on a replay are confined to a rolled-back SQLite savepoint.
     previous = db.scalar(select(WorkflowRun).where(
         WorkflowRun.actor_id == principal.user.id, WorkflowRun.request_key == request_key))
+    if payment_file is not None:
+        try:
+            raw = (config.document_root.expanduser() / payment_file.id).read_bytes()
+            if len(raw) != payment_file.size_bytes or sha256(raw).hexdigest() != payment_file.sha256:
+                damaged = True
+        except OSError:
+            damaged = True
     planning_receipts=[]
     preflight_issues=[]
     if prepared_documents is None and not damaged and documents and workflow_id in {'weekly_cycle','process_activity'}:
@@ -145,7 +164,8 @@ def run_workflow(db, principal, config, *, workflow_id, project_id, request_key,
                      conversation=conversation_id, selected=sorted(str(x) for x in document_ids),
                      documents=sorted((f.id, f.sha256) for f, _ in documents), cutoffs=[[list(key), value] for key, value in sorted(cutoffs.items())], mapping_ref=mapping_ref,
                      activity_registry=[[list(key), value] for key,value in sorted(activity_registry.items())],
-                     preflight_issues=preflight_issues)
+                     preflight_issues=preflight_issues,
+                     payment_return_source=([payment_file.id, payment_file.sha256] if payment_file else None))
     if workflow_id != 'analyze_intake':
         signature['project_code_scope'] = project_codes.get(project_id)
     fingerprint = sha256(json.dumps(signature, sort_keys=True).encode()).hexdigest()
@@ -176,6 +196,12 @@ def run_workflow(db, principal, config, *, workflow_id, project_id, request_key,
             return step_result(step, 'blocked', ['NO_VISIBLE_DOCUMENTS'])
         if preflight_issues:
             return step_result(step, 'blocked', preflight_issues)
+        if step == 'receive_payment_report':
+            if payment_file is None:
+                return step_result(step, 'needs_review', ['PAYMENT_REPORT_SUBMISSION_REQUIRED'])
+            return step_result(step, 'completed', report_file_id=payment_file.id,
+                               report_sha256=payment_file.sha256,
+                               authority='UNVERIFIED_UPLOAD_ONLY')
         if step == 'verify_intake':
             return step_result(step, 'completed', files=len(documents),
                                source_rows=sum(record.row_count for _, record in documents))
@@ -231,7 +257,9 @@ def run_workflow(db, principal, config, *, workflow_id, project_id, request_key,
     run = WorkflowRun(actor_id=principal.user.id, project_id=project_id, request_key=request_key,
                       fingerprint=fingerprint, workflow_id=workflow_id, knowledge_version=knowledge().version,
                       created_at=int(time()), status=status,
-                      snapshot={'steps': results, 'source_ids': [f.id for f, _ in documents], 'mapping_ref': mapping_ref,
+                      snapshot={'steps': results, 'source_ids': [f.id for f, _ in documents],
+                                'payment_return_file_id': payment_file.id if payment_file else None,
+                                'mapping_ref': mapping_ref,
                                 'planning_activities': planning_receipts,
                                 'execution': {'mode': 'synchronous', 'completed_at': datetime.now(timezone.utc).isoformat()},
                                 'preview': result_text if workflow_id in {'process_activity', 'show_issues'} else None})
