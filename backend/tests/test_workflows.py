@@ -82,7 +82,8 @@ def test_weekly_steps_block_finance_and_use_same_api_runner(workspace):
     assert [s['step'] for s in body['steps']] == expected
     assert body['status'] == 'blocked'
     assert body['steps'][-1]['step'] == 'export_payment_request'
-    assert body['steps'][-1]['issue_codes'] == ['DEPENDENCY_NOT_SATISFIED']
+    assert 'DEPENDENCY_NOT_SATISFIED' in body['steps'][-1]['issue_codes']
+    assert 'EXACT_BATCH_APPROVAL_REQUIRED' in body['steps'][-1]['unverified_requirements']
     assert body['steps'][-1]['blocked_by'] == 'check_planning'
     assert body['steps'][-1]['executed'] is False
     replay = c.post('/api/workflows/runs',headers=h,json={'request_id':key,'project_id':1,'workflow_id':'weekly_cycle'})
