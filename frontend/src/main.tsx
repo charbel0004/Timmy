@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { api, ApiError, errorMessage } from "./api";
 import type { Session } from "./api";
-import { Dashboard, DocumentHistory, Login, OperationsPage, SettingsPanel } from "./features";
+import { StructuralReview, Dashboard, DocumentHistory, Login, OperationsPage, SettingsPanel } from "./features";
 import { Badge, Brand, Icon } from "./design";
 import { Assistant, ConversationHistory } from "./assistant";
 
@@ -158,7 +158,7 @@ function Workspace({ session, onExit, onSession }: { session: Session; onExit: (
             (visible(page) ? <Administration key={page} page={page} session={session} /> : <p role="alert">Permission denied.</p>)}
           {(page === "access" || page === "users" || page === "roles") &&
             (visible("access") ? <AccessManagement session={session} /> : <p role="alert">Permission denied.</p>)}
-          {page === "imports" && canReadProjects && <DocumentHistory />}
+          {page === "imports" && canReadProjects && <><DocumentHistory /><StructuralReview session={session} /></>}
           {(page === "imports" || page === "timesheets" || page === "discrepancies" || page === "batches") &&
             (canReadProjects ? <OperationsPage key={page} section={page} /> : <p role="alert">Permission denied.</p>)}
           {page === "security" && <PasswordScreen session={session} onDone={(value) => {

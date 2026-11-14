@@ -27,7 +27,7 @@ def session_view(principal: Principal, demo_mode: bool) -> SessionView:
 @router.get("/health")
 def health(db: Database):
     try:
-        db.execute(text("SELECT version_num FROM alembic_version WHERE version_num = '0008'")).scalar_one()
+        db.execute(text("SELECT version_num FROM alembic_version WHERE version_num = '0011'")).scalar_one()
     except SQLAlchemyError:
         raise HTTPException(503, "Database unavailable or migrations pending") from None
     return {"status": "ok"}
@@ -87,7 +87,17 @@ def list_projects(principal: Authenticated, db: Database) -> list[ProjectView]:
 def read_settings(request: Request, principal: Authenticated):
     principal.require("settings:read")
     config = request.app.state.config
-    return {"demo_mode": config.demo_mode, "ollama_model": config.ollama_model}
+    return {
+        "demo_mode": config.demo_mode, "ollama_model": config.ollama_model,
+        "report_integration": {
+            "status": "blocked",
+            "missing": [
+                *(["Approved external source identity"] if not config.report_source else []),
+                *(["Approved project timezone"] if not config.report_timezone else []),
+                "Registered trusted provider and validated-version mapping",
+            ],
+        },
+    }
 
 
 @router.get("/ai/status")

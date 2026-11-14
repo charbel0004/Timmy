@@ -190,3 +190,46 @@ class DocumentImport(Base):
     )
     sheets: Mapped[list] = mapped_column(JSON)
     row_count: Mapped[int]
+
+
+class StructuralValidation(Base):
+    __tablename__ = "structural_validations"
+    __table_args__ = (UniqueConstraint("project_id", "fingerprint"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"), index=True)
+    actor_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    fingerprint: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[int]
+    snapshot: Mapped[dict] = mapped_column(JSON)
+
+
+class EvidenceReview(Base):
+    __tablename__ = "evidence_reviews"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    validation_id: Mapped[int] = mapped_column(ForeignKey("structural_validations.id"), index=True)
+    actor_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    project_code: Mapped[str] = mapped_column(Text)
+    activity_code: Mapped[str] = mapped_column(Text)
+    kind: Mapped[str] = mapped_column(String(16))
+    decision: Mapped[str] = mapped_column(String(16))
+    evidence_ref: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[int]
+
+
+class ExternalReportVersion(Base):
+    __tablename__ = "external_report_versions"
+    __table_args__ = (UniqueConstraint("project_id", "activity_code", "version"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"))
+    activity_code: Mapped[str] = mapped_column(Text)
+    source: Mapped[str] = mapped_column(Text)
+    report_id: Mapped[str] = mapped_column(Text)
+    version: Mapped[str] = mapped_column(Text)
+    submitted_at: Mapped[str] = mapped_column(Text)
+    local_date: Mapped[str] = mapped_column(Text)
+    validated_at: Mapped[str | None] = mapped_column(Text)
+    evidence_ref: Mapped[str] = mapped_column(Text)
+    cutoff: Mapped[str | None] = mapped_column(Text)

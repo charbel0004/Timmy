@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from "react";
 import type { FormEvent, ReactNode } from "react";
-import { api, documentDownload, errorMessage } from "./api";
+import { request, api, documentDownload, errorMessage } from "./api";
 import type { Session, OperationsSection } from "./api";
 import { Badge, Brand, Icon } from "./design";
 import type { IconName } from "./design";
@@ -210,8 +210,120 @@ export function SettingsPanel() {
       <ApiPanel load={api.settings} render={(settings) => <dl className="status-list">
         <div><dt>Configured model</dt><dd data-mono>{settings.ollama_model}</dd></div>
         <div><dt>Demo mode</dt><dd>{settings.demo_mode ? "Enabled" : "Disabled"}</dd></div>
+        {settings.report_integration && <div><dt>External report integration</dt><dd>
+          {settings.report_integration.status}<ul>{settings.report_integration.missing.map((item) => <li key={item}>{item}</li>)}</ul>
+        </dd></div>}
       </dl>} />
     </section>
     <section className="glass-panel"><h2>Assigned projects</h2><ProjectList /></section>
   </div>;
+}
+
+
+type Validation = { id: number; activities: Array<{
+  project_code: string; activity_code: string; structure: string; session_pairs: number; role_slots: number;
+  planning: string; staff: string; report: string; eligibility: string; approval: string; settlement: string;
+  issues: Record<string, number>; review_tasks: string[];
+  report_evidence?: { id: number; cutoff: string; version: string } | null;
+}> };
+
+type EvidenceReview = { id: number; kind: string; decision: string; evidence_ref: string;
+  project_code: string; activity_code: string; actor_id: number };
+
+function EvidenceHistory({ validation, item, session, project }: {
+  validation: number; item: Validation["activities"][number]; session: Session; project: string;
+}) {
+  const path = `/documents/reviews/${validation}`;
+  const [history, setHistory] = useState<EvidenceReview[]>([]);
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const kinds = (["planning", "staff"] as const).filter((kind) =>
+    session.project_permissions?.[project]?.includes(`${kind}.verify`));
+  useEffect(() => {
+    let current = true;
+    request<EvidenceReview[]>(path).then(
+      (rows) => { if (current) setHistory(rows); },
+      (error) => { if (current) setError(errorMessage(error)); },
+    );
+    return () => { current = false; };
+  }, [path]);
+  return <details>
+    <summary>Evidence review</summary>
+    <p className="muted">Reviews apply to this snapshot. Report authority and payment eligibility are checked separately.</p>
+    <ul>{history.filter((row) => row.project_code === item.project_code && row.activity_code === item.activity_code).map((row) =>
+      <li key={row.id}>{row.kind}: {row.decision} · {row.evidence_ref} · Reviewer #{row.actor_id}</li>)}</ul>
+    {error && <p role="alert">{error}</p>}
+    {kinds.length > 0 && <form className="admin-grid" onSubmit={async (event) => {
+      event.preventDefault();
+      const form = event.currentTarget;
+      const fields = new FormData(form);
+      setBusy(true); setError("");
+      try {
+        await request(path, { method: "POST", headers: { "Content-Type": "application/json", "X-CSRF-Token": session.csrf_token },
+          body: JSON.stringify({ project_code: item.project_code, activity_code: item.activity_code,
+            kind: fields.get("kind"), decision: fields.get("decision"), evidence_ref: fields.get("evidence") }) });
+        setHistory(await request<EvidenceReview[]>(path));
+        form.reset();
+      } catch (error) { setError(errorMessage(error)); }
+      finally { setBusy(false); }
+    }}>
+      <label>Evidence category<select name="kind">{kinds.map((kind) => <option key={kind}>{kind}</option>)}</select></label>
+      <label>Decision<select name="decision"><option value="confirmed">Confirm review</option><option value="rejected">Reject evidence</option></select></label>
+      <label>Independent evidence reference<input name="evidence" required minLength={5} maxLength={500} /></label>
+      <div><button disabled={busy}>Record decision</button></div>
+    </form>}
+  </details>;
+}
+
+export function StructuralReview({ session }: { session: Session }) {
+  const [project, setProject] = useState("");
+  const [saved, setSaved] = useState<Validation | null>(null);
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const path = `/documents/structural-validation/${project}`;
+  useEffect(() => {
+    let current = true;
+    setSaved(null);
+    setError("");
+    if (project) request<Validation | null>(path).then(
+      (value) => { if (current) setSaved(value); },
+      (error) => { if (current) setError(errorMessage(error)); },
+    );
+    return () => { current = false; };
+  }, [project, path]);
+
+  async function validate() {
+    setBusy(true);
+    setError("");
+    try {
+      setSaved(await request<Validation>(path, {
+        method: "POST", headers: { "X-CSRF-Token": session.csrf_token },
+      }));
+    } catch (error) { setError(errorMessage(error)); }
+    finally { setBusy(false); }
+  }
+
+  return <section className="glass-panel admin-form">
+    <h2>Structural validation &amp; review</h2>
+    <ApiPanel load={api.projects} render={(projects) => <label>Active project
+      <select disabled={busy} value={project} onChange={(event) => setProject(event.target.value)}>
+        <option value="">Select project</option>
+        {projects.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+      </select>
+    </label>} />
+    {session.permissions.includes("projects:manage") && <div>
+      <button disabled={!project || busy} onClick={() => void validate()}>{busy ? "Checking files…" : "Run and save structural checks"}</button>
+    </div>}
+    {error && <p role="alert">{error}</p>}
+    {saved && <><p role="status">Saved validation #{saved.id}</p>
+      {saved.activities.map((item) => <article key={JSON.stringify([item.project_code, item.activity_code])}>
+        <h3>{item.project_code} / {item.activity_code}</h3>
+        <p>{item.structure} · {item.session_pairs}/6 session pairs · {item.role_slots}/12 role slots</p>
+        <p>Planning: {item.planning} · Identity: {item.staff} · External report: {item.report}</p>
+        <p>Eligibility: {item.eligibility} · Approval: {item.approval} · Settlement: {item.settlement}</p>
+        {item.report_evidence && <p>Frozen cutoff: {item.report_evidence.cutoff} · Validated version: {item.report_evidence.version}</p>}
+        <EvidenceHistory key={saved.id} validation={saved.id} item={item} session={session} project={project} />
+        <ul>{[...Object.keys(item.issues), ...item.review_tasks].map((code) => <li key={code}>{code}</li>)}</ul>
+      </article>)}</>}
+  </section>;
 }

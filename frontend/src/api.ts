@@ -11,7 +11,7 @@ export interface Session {
   must_change_password: boolean;
 }
 export interface Project { id: number; name: string }
-export interface Settings { demo_mode: boolean; ollama_model: string }
+export interface Settings { demo_mode: boolean; ollama_model: string; report_integration?: { status: string; missing: string[] } }
 
 export interface OllamaStatus {
   model: string;
@@ -61,10 +61,10 @@ export const api = {
   createConversation: (csrf: string) => request<Conversation>("/chat/conversations", {
     method: "POST", headers: { "X-CSRF-Token": csrf },
   }),
-  sendMessage: (id: string, message: string, csrf: string, requestId: string) =>
+  sendMessage: (id: string, message: string, csrf: string, requestId: string, projectId?: number) =>
     request<ChatReply>(`/chat/conversations/${id}/messages`, {
       method: "POST", headers: { "X-CSRF-Token": csrf, "Content-Type": "application/json" },
-      body: JSON.stringify({ message, request_id: requestId }),
+      body: JSON.stringify({ message, request_id: requestId, project_id: projectId }),
     }),
   operations: (section: OperationsSection) => request<OperationsRecord[]>(`/operations/${section}`),
   renameConversation: (id: string, title: string, csrf: string) => request<Conversation>(`/chat/conversations/${id}`, {

@@ -20,6 +20,8 @@ class Settings(BaseSettings):
     session_hours: Annotated[int, Field(ge=1, le=24)] = 8
     activation_minutes: Annotated[int, Field(ge=5, le=1440)] = 60
     demo_mode: bool = False
+    report_source: str | None = None
+    report_timezone: str | None = None
     document_root: Path = Path(".timmy-data/documents")
     whisper_model: str = "small"
     whisper_device: str = "cpu"

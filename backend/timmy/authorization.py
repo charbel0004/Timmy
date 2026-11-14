@@ -15,7 +15,8 @@ RESERVED = {
     "viewer": frozenset({"projects:read"}),
 }
 # Financial write permissions remain unavailable until the workflow is authorized.
-DELEGABLE = frozenset({
+PROJECT_REVIEW = frozenset({"planning.verify", "staff.verify"})
+DELEGABLE = PROJECT_REVIEW | frozenset({
     "projects:read", "activities.view", "timesheets.view", "discrepancies.view", "payments.view",
 })
 CATALOG = sorted(DELEGABLE | frozenset.union(*RESERVED.values()))
@@ -34,7 +35,7 @@ def effective_access(db, user):
         if name != "admin" or role_id == user.role_id:
             global_keys.update(RESERVED.get(name, ()))
             if name in RESERVED:
-                global_keys.update(DELEGABLE)
+                global_keys.update(DELEGABLE - PROJECT_REVIEW)
         global_keys.update(key for key in db.scalars(select(role_permissions.c.permission).where(
             role_permissions.c.role_id == role_id,
         )) if key in DELEGABLE)

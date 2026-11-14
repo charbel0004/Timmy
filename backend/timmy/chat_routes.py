@@ -1,5 +1,5 @@
 from .session_preview import preview as session_preview
-from .documents import scoped_documents, spreadsheet_profile
+from .documents import resolve_documents, spreadsheet_profile
 from datetime import datetime, timezone
 from time import time
 from uuid import UUID, uuid4
@@ -25,6 +25,8 @@ class SendMessage(BaseModel):
 
     request_id: UUID
     message: str = Field(min_length=1, max_length=1500)
+    project_id: int | None = Field(default=None, gt=0)
+    document_ids: list[UUID] = Field(default_factory=list, max_length=20)
 
 
 def owned(db: Database, principal: Authenticated, conversation_id: UUID) -> Conversation:
@@ -96,6 +98,7 @@ async def send(conversation_id: UUID, payload: SendMessage, request: Request, pr
 
     if previous := db.scalar(query):
         return replay(previous)
+    resolve_documents(db, principal, identifier, payload.project_id, payload.document_ids)
     context = [{"role": item["role"], "content": item["text"][:1000]}
                for item in history(db, identifier, limit=2)["messages"]]
     db.rollback()
@@ -113,12 +116,12 @@ async def send(conversation_id: UUID, payload: SendMessage, request: Request, pr
         document_used = True
         actor = current_principal(request, db)
         owned(db, actor, conversation_id)
-        documents = db.execute(scoped_documents(db, actor, identifier).limit(20)).all()
+        documents = resolve_documents(db, actor, identifier, payload.project_id, payload.document_ids)
         audit(db, "chat_tool_analyze_documents", owner, resource_type="conversation", resource_id=identifier,
               outcome="success" if documents else "no_visible_documents")
         arabic = any("\u0600" <= character <= "\u06ff" for character in payload.message)
         if not documents:
-            return "لا توجد ملفات متاحة في هذه المحادثة." if arabic else "This conversation has no accessible uploaded spreadsheets."
+            return "لا توجد ملفات متاحة في هذه المحادثة." if arabic else "No accessible spreadsheets were found here. Select an assigned project in Context to include its available documents, or attach a spreadsheet."
         import re
 
         if re.search(r"session|validate|eligib|payment policy|الجلسات|تحقق", payload.message, re.I):

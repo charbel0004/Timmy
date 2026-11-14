@@ -383,3 +383,129 @@ def test_uploaded_timesheet_inspection_reads_private_rows_without_model(tmp_path
     assert "PRIVATE-ID" not in answer
     with Session(client.app.state.engine) as db:
         assert db.scalar(select(AuditEvent).where(AuditEvent.action == "chat_tool_analyze_documents"))
+
+
+def test_project_document_discovery_and_explicit_scope(client, tmp_path, monkeypatch):
+    from uuid import uuid4
+    from timmy.ai import OllamaAdapter
+
+    async def unexpected(*args, **kwargs):
+        raise AssertionError("Structural inspection should use the deterministic reader")
+
+    monkeypatch.setattr(OllamaAdapter, "structured", unexpected)
+    client.app.state.config.document_root = tmp_path / "docs"
+    with Session(client.app.state.engine) as db, db.begin():
+        role = Role(name="admin")
+        db.add(role)
+        db.flush()
+        db.add(User(id=52, username="scope-owner", role_id=role.id, password_hash=password_hasher.hash(PASSWORD)))
+        db.flush()
+        db.execute(insert(project_memberships).values(project_id=1, user_id=52))
+
+    def login(name):
+        result = client.post("/api/auth/login", headers=ORIGIN, json={"username": name, "password": PASSWORD})
+        return ORIGIN | {"X-CSRF-Token": result.json()["csrf_token"]}
+
+    headers = login("scope-owner")
+    original = client.post("/api/chat/conversations", headers=headers).json()["id"]
+    uploaded = client.post("/api/documents", params={"project_id": 1, "conversation_id": original, "filename": "fixture.csv"},
+                           content=b"session_number,work_date\nS1,2026-07-01\n", headers=headers | {"Content-Type": "text/csv"})
+    assert uploaded.status_code == 201
+    identifier = uploaded.json()["id"]
+
+    def inspect(headers, **context):
+        target = client.post("/api/chat/conversations", headers=headers).json()["id"]
+        return client.post(f"/api/chat/conversations/{target}/messages", headers=headers, json={
+            "request_id": str(uuid4()), "message": "Inspect the uploaded spreadsheet", **context,
+        })
+
+    assert identifier not in inspect(headers).json()["message"]["text"]
+    assert identifier in inspect(headers, project_id=1).json()["message"]["text"]
+    validation = "/api/documents/structural-validation/1"
+    assert client.get(validation).json() is None
+    upload = client.post("/api/documents", params={"project_id": 1, "conversation_id": original, "filename": "claims.csv"},
+                         content=b"project_code,activity_code,staff_id,role,session_number,work_date,timesheet_submitted_date\nP,A,S,TRAINER,S1,2026-07-01,2026-07-02\n",
+                         headers=headers | {"Content-Type": "text/csv"})
+    assert upload.status_code == 201
+    persisted = client.post(validation, headers=headers)
+    assert persisted.status_code == 200, persisted.text
+    assert persisted.json()["activities"][0]["eligibility"] == "BLOCKED"
+    assert client.post(validation, headers=headers).json() == persisted.json()
+    assert client.get(validation).json() == persisted.json()
+    review = f"/api/documents/reviews/{persisted.json()['id']}"
+    decision = {"project_code": "P", "activity_code": "A", "kind": "planning",
+                "decision": "confirmed", "evidence_ref": "Synthetic approval reference"}
+    assert client.post(review, headers=headers, json=decision).status_code == 403
+    from timmy.models import project_permission_overrides
+    with Session(client.app.state.engine) as db, db.begin():
+        db.execute(insert(project_permission_overrides).values(
+            project_id=1, user_id=52, permissions=["projects:read", "timesheets.view", "planning.verify"],
+        ))
+    result = client.post(review, headers=headers, json=decision)
+    assert result.status_code == 200, result.text
+    assert client.post(review, headers=headers, json=decision).json() == result.json()
+    assert client.post(review, headers=headers, json=decision | {"kind": "staff"}).status_code == 403
+    assert client.post(review, headers=headers, json=decision | {"kind": "report"}).status_code == 422
+    assert len(client.get(review).json()) == 1
+    assert client.get(validation).json()["activities"][0]["eligibility"] == "BLOCKED"
+    for filename, data in (
+        ("planning.csv", b"project_code,activity_code,approved_start_date,approved_end_date\nP,A,2026-06-01,2026-07-31\n"),
+        ("staff.csv", b"staff_id,status\nS,Active\n"),
+    ):
+        assert client.post("/api/documents", params={"project_id": 1, "conversation_id": original, "filename": filename},
+                           content=data, headers=headers | {"Content-Type": "text/csv"}).status_code == 201
+    baseline = client.post(validation, headers=headers)
+    assert baseline.status_code == 200
+    from sqlalchemy import update
+    from timmy.models import ExternalReportVersion
+    with Session(client.app.state.engine) as db, db.begin():
+        db.execute(update(projects).where(projects.c.id == 1).values(project_code="P"))
+        db.add(ExternalReportVersion(project_id=1, activity_code="A", source="test", report_id="R",
+                                     version="1", submitted_at="2026-06-30T00:00:00Z", local_date="2026-06-30",
+                                     cutoff="2026-06-30", validated_at="2026-06-30T12:00:00Z", evidence_ref="test event"))
+    revalidated = client.post(validation, headers=headers)
+    assert revalidated.status_code == 200
+    assert revalidated.json()["id"] != baseline.json()["id"]
+    item = revalidated.json()["activities"][0]
+    assert item["issues"].get("AFTER_VALIDATED_REPORT_CUTOFF") == 1
+    assert item["report_evidence"]["cutoff"] == "2026-06-30"
+    assert item["eligibility"] == "BLOCKED"
+
+
+    assert identifier in inspect(headers, document_ids=[identifier]).json()["message"]["text"]
+    assert inspect(headers, project_id=2).status_code == 403
+    reviewer = login("reviewer")
+    assert client.post(validation, headers=reviewer).status_code == 403
+    assert client.get(validation).json() is None
+    assert inspect(reviewer, project_id=1, document_ids=[identifier]).status_code == 404
+    assert client.get(f"/api/documents/{identifier}/download").status_code == 404
+
+
+def test_trusted_report_freezes_first_validated_version(client):
+    from timmy.report_reconciliation import ReportEvent, synchronize
+
+    class SyntheticProvider:
+        source = "synthetic-test-only"
+        versions = []
+
+        def health(self):
+            return "ready"
+
+        def events(self, project_id, activity_code):
+            return self.versions
+
+    provider = SyntheticProvider()
+    provider.versions = [ReportEvent(report_id="R", version="v1", submitted_at="2026-07-10T22:00:00Z",
+                                     validated_at="2026-07-12T12:00:00Z", evidence_ref="test-event-1")]
+    engine = client.app.state.engine
+
+    def sync():
+        return synchronize(engine, provider, project_id=1, activity_code="TEST", timezone="Asia/Beirut")
+
+    assert sync() == "2026-07-11"
+    provider.versions.append(ReportEvent(report_id="R", version="v2", submitted_at="2026-07-14T12:00:00Z",
+                                         validated_at="2026-07-15T12:00:00Z", evidence_ref="test-event-2"))
+    assert sync() == "2026-07-11"
+    assert sync() == "2026-07-11"
+    with Session(engine) as db:
+        assert len(list(db.scalars(select(AuditEvent).where(AuditEvent.action == "external_report_synced")))) == 2

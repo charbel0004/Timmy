@@ -4,12 +4,13 @@ from datetime import datetime, timezone
 from hashlib import sha256
 from io import BytesIO, StringIO
 from pathlib import Path
+from typing import Literal
 from uuid import UUID, uuid4
 from zipfile import BadZipFile, ZipFile
 
 from fastapi import APIRouter, HTTPException, Request, Response
-from pydantic import BaseModel
-from sqlalchemy import select, text
+from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy import or_, select, text
 from starlette.concurrency import run_in_threadpool
 
 from .audit import audit
@@ -89,7 +90,11 @@ def describe(file, record):
 
 def scoped_documents(db, principal, conversation_id=None):
     allowed = [key for key, permissions in principal.project_permissions.items() if "timesheets.view" in permissions]
-    query = select(StoredFile, DocumentImport).join(DocumentImport).where(StoredFile.project_id.in_(allowed))
+    own = select(Conversation.id).where(Conversation.owner_id == principal.user.id)
+    query = select(StoredFile, DocumentImport).join(DocumentImport).where(
+        StoredFile.project_id.in_(allowed),
+        or_((DocumentImport.conversation_id.is_(None)) & (StoredFile.uploaded_by == principal.user.id), DocumentImport.conversation_id.in_(own)),
+    )
     if conversation_id is not None:
         query = query.where(DocumentImport.conversation_id == conversation_id)
     return query
@@ -245,3 +250,173 @@ def spreadsheet_profile(record):
             "candidate_fields": fields,
         })
     return summaries
+
+
+def resolve_documents(db, principal, conversation_id, project_id=None, document_ids=()):
+    """Resolve without traversing another user's private conversation."""
+    visible = scoped_documents(db, principal)
+    if project_id is not None:
+        principal.require("timesheets.view", project_id)
+        visible = visible.where(StoredFile.project_id == project_id)
+    ids = list(dict.fromkeys(str(identifier) for identifier in document_ids))
+    explicit = db.execute(visible.where(StoredFile.id.in_(ids))).all() if ids else []
+    if len(explicit) != len(ids):
+        raise HTTPException(404, "A selected document is unavailable in this scope")
+    automatic = visible.where(
+        DocumentImport.conversation_id == conversation_id
+    ) if project_id is None else visible.where(or_(
+        DocumentImport.conversation_id == conversation_id,
+        DocumentImport.conversation_id.is_(None),
+        StoredFile.uploaded_by == principal.user.id,
+    ))
+    rows = db.execute(automatic.order_by(
+        (DocumentImport.conversation_id == conversation_id).desc(), StoredFile.id,
+    ).limit(21)).all()
+    combined = {file.id: (file, record) for file, record in explicit}
+    for file, record in rows:
+        combined.setdefault(file.id, (file, record))
+    if len(combined) > 20:
+        raise HTTPException(422, "More than 20 spreadsheets are in scope. Narrow the project or conversation.")
+    return list(combined.values())
+
+
+def project_report_cutoffs(db, project_id):
+    from .models import ExternalReportVersion
+
+    code = db.scalar(select(projects.c.project_code).where(projects.c.id == project_id))
+    if not code:
+        return {}
+    versions = db.scalars(select(ExternalReportVersion).where(
+        ExternalReportVersion.project_id == project_id, ExternalReportVersion.cutoff.is_not(None),
+    ).order_by(ExternalReportVersion.id))
+    result = {}
+    for row in versions:
+        key = (project_id, code, row.activity_code)
+        if key in result:
+            raise HTTPException(409, "Conflicting frozen report evidence")
+        result[key] = {"id": row.id, "cutoff": row.cutoff, "version": row.version}
+    return result
+
+
+@router.post("/structural-validation/{project_id}")
+def persist_validation(project_id: int, request: Request, principal: Authenticated, db: Database):
+    from time import time
+    from .auth import current_principal
+    from .models import StructuralValidation
+    from .session_preview import preview
+
+    require_csrf(request, principal)
+    db.rollback()
+    db.execute(text("BEGIN IMMEDIATE"))
+    principal = current_principal(request, db)
+    require_csrf(request, principal)
+    principal.require("projects:manage")
+    principal.require("timesheets.view", project_id)
+    if db.scalar(select(projects.c.status).where(projects.c.id == project_id)) != "active":
+        raise HTTPException(409, "Select an active project")
+    documents = resolve_documents(db, principal, None, project_id)
+    cutoffs = project_report_cutoffs(db, project_id)
+    cutoff_key = ":".join(f"{value['id']}@{value['cutoff']}" for value in cutoffs.values())
+    fingerprint = sha256(("structural-v2:" + cutoff_key + ":" + str(principal.user.id) + ":" + ":".join(sorted(file.id for file, _ in documents))).encode()).hexdigest()
+    existing = db.scalar(select(StructuralValidation).where(
+        StructuralValidation.project_id == project_id, StructuralValidation.fingerprint == fingerprint,
+        StructuralValidation.actor_id == principal.user.id,
+    ))
+    if existing:
+        return {"id": existing.id, "activities": existing.snapshot["activities"]}
+    snapshot = {"claims": [], "activities": []}
+    if preview(documents, snapshot=snapshot, report_cutoffs=cutoffs) is None or not snapshot["activities"]:
+        raise HTTPException(422, "No supported session claims in the visible project documents")
+    event = StructuralValidation(project_id=project_id, actor_id=principal.user.id,
+                                 fingerprint=fingerprint, created_at=int(time()), snapshot=snapshot)
+    db.add(event)
+    db.flush()
+    audit(db, "structural_validation_saved", principal.user.id, resource_type="structural_validation",
+          resource_id=str(event.id), outcome="authority_pending")
+    db.commit()
+    return {"id": event.id, "activities": snapshot["activities"]}
+
+
+@router.get("/structural-validation/{project_id}")
+def latest_validation(project_id: int, principal: Authenticated, db: Database):
+    from .models import StructuralValidation
+
+    principal.require("timesheets.view", project_id)
+    event = db.scalar(select(StructuralValidation).where(
+        StructuralValidation.project_id == project_id, StructuralValidation.actor_id == principal.user.id,
+    ).order_by(StructuralValidation.id.desc()).limit(1))
+    return {"id": event.id, "activities": event.snapshot["activities"]} if event else None
+
+
+class EvidenceDecision(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    project_code: str = Field(min_length=1, max_length=200)
+    activity_code: str = Field(min_length=1, max_length=200)
+    kind: Literal["planning", "staff"]
+    decision: Literal["confirmed", "rejected"]
+    evidence_ref: str = Field(min_length=5, max_length=500)
+
+
+def readable_validation(db, principal, validation_id):
+    from .models import StructuralValidation
+
+    event = db.get(StructuralValidation, validation_id)
+    if event is None:
+        raise HTTPException(404, "Validation unavailable")
+    principal.require("timesheets.view", event.project_id)
+    # A project permission alone cannot reveal provenance from private chats.
+    visible = set(db.scalars(scoped_documents(db, principal).with_only_columns(StoredFile.id)))
+    sources = {sheet["file_id"] for sheet in event.snapshot.get("sheets", [])}
+    if not sources or not sources <= visible:
+        raise HTTPException(404, "Validation evidence unavailable")
+    return event
+
+
+@router.post("/reviews/{validation_id}")
+def review_evidence(validation_id: int, body: EvidenceDecision, request: Request,
+                    principal: Authenticated, db: Database):
+    from time import time
+    from .auth import current_principal
+    from .models import EvidenceReview
+
+    require_csrf(request, principal)
+    db.rollback()
+    db.execute(text("BEGIN IMMEDIATE"))
+    principal = current_principal(request, db)
+    require_csrf(request, principal)
+    event = readable_validation(db, principal, validation_id)
+    principal.require(f"{body.kind}.verify", event.project_id)
+    if not any((row["project_code"], row["activity_code"]) == (body.project_code, body.activity_code)
+               for row in event.snapshot["activities"]):
+        raise HTTPException(404, "Activity unavailable in this validation")
+    previous = db.scalar(select(EvidenceReview).where(
+        EvidenceReview.validation_id == event.id, EvidenceReview.project_code == body.project_code,
+        EvidenceReview.activity_code == body.activity_code, EvidenceReview.kind == body.kind,
+    ).order_by(EvidenceReview.id.desc()).limit(1))
+    if (previous and previous.actor_id == principal.user.id and previous.decision == body.decision
+            and previous.evidence_ref == body.evidence_ref):
+        return {"id": previous.id}
+    entry = EvidenceReview(validation_id=event.id, actor_id=principal.user.id,
+                           created_at=int(time()), **body.model_dump())
+    db.add(entry)
+    db.flush()
+    audit(db, "evidence_review_recorded", principal.user.id, resource_type="evidence_review",
+          resource_id=str(entry.id), outcome=body.decision)
+    db.commit()
+    return {"id": entry.id}
+
+
+@router.get("/reviews/{validation_id}")
+def get_reviews(validation_id: int, principal: Authenticated, db: Database):
+    from .models import EvidenceReview
+
+    event = readable_validation(db, principal, validation_id)
+    return [
+        {"id": item.id, "actor_id": item.actor_id, "kind": item.kind, "decision": item.decision,
+         "evidence_ref": item.evidence_ref, "created_at": item.created_at,
+         "project_code": item.project_code, "activity_code": item.activity_code}
+        for item in db.scalars(select(EvidenceReview).where(
+            EvidenceReview.validation_id == event.id,
+        ).order_by(EvidenceReview.id.desc()).limit(100))
+    ]

@@ -174,7 +174,7 @@ export function Assistant({ conversation, append, canReadProjects, csrfToken, on
         }
       }
       setActivity("processing");
-      const reply = await api.sendMessage(id, message, csrfToken, attempt.requestId);
+      const reply = await api.sendMessage(id, message, csrfToken, attempt.requestId, projectId);
       append(id, { ...optimistic, timestamp: reply.message.timestamp }, reply.message);
       pending.current = undefined;
     } catch (error) {
