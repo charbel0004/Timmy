@@ -5,9 +5,9 @@
 ## GitHub flow
 
 1. Existing `ci.yml` runs backend tests, frontend tests/build, and migrations on PRs and `main`.
-2. `deploy.yml` triggers **only** after a successful push-to-`main` CI run and `TIMMY_DEPLOY_ENABLED=true`.
+2. `deploy.yml` triggers **only** after a successful push-to-`main` CI run, `TIMMY_DEPLOY_ENABLED=true`, **and** `TIMMY_DEPLOY_V2_READY=true`. The second gate prevents an old root-installed deploy script from running when this repository is upgraded.
 3. GitHub Actions SSH uses `timmy-deploy` with a **forced command** permitting only `deploy <40-character SHA>`.
-4. Root-owned `/usr/local/sbin/timmy-deploy` checks `main` equals the tested SHA, backs up SQLite, temporarily stops FastAPI, updates the *single* checkout, re-installs Python deps using uv, runs tests and a disposable migration, builds React with `VITE_API_URL=/api`, syncs static files, restarts systemd, verifies health. On failure, it attempts to restore the previous code and frontend. It **does not roll back database schema**.
+4. Root-owned `/usr/local/sbin/timmy-deploy` checks `main` equals the tested SHA, stops FastAPI, takes a consistent offline SQLite backup, updates the *single* checkout, re-installs Python deps using uv, runs tests and disposable migrations from an isolated temporary source copy with a sanitized environment, applies only the allowlisted additive 0016→0017 migration when necessary, builds React with `VITE_API_URL=/api`, syncs static files, restarts systemd, verifies health. On failure, it restores the previous code and frontend and, when a live schema upgrade was attempted, restores the offline database backup before restarting the previous backend. It refuses to restart if database recovery verification fails. No arbitrary schema migrations are allowed.
 
 **Trade-off:** in-place deployment causes a short maintenance window, and rollback is best-effort. Appropriate for the hackathon MVP, not a zero-downtime production design.
 
@@ -118,6 +118,7 @@ Repository Actions variables:
 - `TIMMY_DEPLOY_HOST`: public IP or hostname
 - `TIMMY_DEPLOY_PORT`: port (typically `22`)
 - `TIMMY_DEPLOY_ENABLED`: **false** until initial manual verification; then **true**
+- `TIMMY_DEPLOY_V2_READY`: **unset/false** until CN has confirmed the API is healthy and installed the reviewed, root-owned deployment script. Only CN should change it to **true** after checking the installed-script SHA. This keeps auto-deployment paused even if the legacy enabled flag is true.
 
 CI actions must pass and `main` should be PR-protected.
 
@@ -132,6 +133,18 @@ If CD fails, leave it disabled, examine the GitHub job logs and `journalctl -u t
 - `.env` and `timmy.db` remain ignored, local, and uncommitted.
 - Keep backup files owned by root and outside the public web root.
 - `TIMMY_COOKIE_SECURE=false` with public port 80 is unsafe for login. Use SSH tunneling until HTTPS and `TIMMY_COOKIE_SECURE=true` are configured.
-- Automated database migrations on the real database are **disabled**. Schema changes require manual review, a consistent backup and a coordinated migration.
+- Production schema upgrades are **fail-closed by default**. The deployment script explicitly allows only previously reviewed additive migration **0016 → 0017** as part of an exact-SHA rollout, after stopping the API and taking a consistent offline SQLite backup. It restores the backup if deployment fails. Any later migration requires separate code review and an updated allowlist.
+- The production server runs a **root-owned installed copy** of the deployment script at `/usr/local/sbin/timmy-deploy`. **CN must review and reinstall the updated script manually** before attempting the next automatic deployment; merging repository changes alone cannot update the installed root script. The forced-command SSH account must remain unchanged.
+- A failed previous deployment may have left `timmy-api` unhealthy despite resetting the Git checkout. CN must verify `systemctl is-active timmy-api`, listener ownership, `/api/health`, and the live database revision before re-enabling the pipeline. Do not reset or migrate the live DB until that health check passes.
 - The in-place rollout will cause brief downtime during dependency installation and tests. This is an explicit MVP trade-off.
 - Root-run backend increases risk; preserve loopback-only API/Ollama, restricted SSH, and no broad sudo for deployment account.
+
+## Explicit CD recovery gate (November 2026)
+
+1. CN verifies the API is healthy at the previous version and confirms **`timmy.db`** in the single root checkout is the authoritative live SQLite database. Do not overwrite it from an older backup.
+2. CN installs reviewed `ops/deploy/deploy-server.sh` as `/usr/local/sbin/timmy-deploy` with root ownership and mode 700, checks the SHA of installed file against the checked-out file, and confirms the restricted SSH deployment user cannot modify the script. No SSH deploy permission change is required.
+3. CN sets GitHub Actions variable `TIMMY_DEPLOY_V2_READY=true` **only after** that installation and health check. Until then, the new main merge will run CI but GitHub Deploy will skip its production job.
+3. On the next verified main SHA, the script stops the API, takes an **offline** SQLite `.backup`, validates integrity and foreign keys, then tests against an isolated source copy with no production `.env`. Production settings cannot contaminate tests.
+4. Only when current revision is **0016** and target is **0017**, the script applies the known additive migration to the live DB while the API is stopped and revalidates the exact revision, `integrity_check`, and `foreign_key_check`. If already 0017, no live migration is attempted. Other mismatches are blocked.
+5. On any failed deployment after migration starts, the script restores code, frontend, and the **offline DB backup**. If DB restoration fails, it leaves the API stopped and prints the backup path for CN's manual recovery. The GitHub job must remain failed.
+6. Finally, CN verifies API health and migration revision, and records the live SHA. GitHub CI passing by itself does not prove a healthy server.
