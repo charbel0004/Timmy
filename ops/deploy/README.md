@@ -1,150 +1,76 @@
-# Agent Timmy — simple hackathon CI/CD
+# Timmy production deployment
 
-**MVP decision:** one application checkout (`/root/apps/Timmy`), one FastAPI service, and existing Nginx static directory (`/var/www/timmy`). No release or staging directory trees. Test files use only disposable `/tmp` directories.
+A successful push-triggered CI run on `main` launches the production workflow when `TIMMY_DEPLOY_ENABLED=true` and `TIMMY_DEPLOY_V2_READY=true`. CI tests and migrates a disposable database. The deployed SSH key invokes the restricted receiver with the exact tested SHA. The server checks that SHA against `origin/main`, prepares it as the non-root `timmy` user, and routes traffic only after standby readiness. GitHub concurrency and a server lock serialize deploys.
 
-## GitHub flow
+## Inspect the existing host
 
-1. Existing `ci.yml` runs backend tests, frontend tests/build, and migrations on PRs and `main`.
-2. `deploy.yml` triggers **only** after a successful push-to-`main` CI run, `TIMMY_DEPLOY_ENABLED=true`, **and** `TIMMY_DEPLOY_V2_READY=true`. The second gate prevents an old root-installed deploy script from running when this repository is upgraded.
-3. GitHub Actions SSH uses `timmy-deploy` with a **forced command** permitting only `deploy <40-character SHA>`.
-4. Root-owned `/usr/local/sbin/timmy-deploy` checks `main` equals the tested SHA, stops FastAPI, takes a consistent offline SQLite backup, updates the *single* checkout, re-installs Python deps using uv, runs tests and disposable migrations from an isolated temporary source copy with a sanitized environment, applies only the allowlisted additive 0016→0017 migration when necessary, builds React with `VITE_API_URL=/api`, syncs static files, restarts systemd, verifies health. On failure, it restores the previous code and frontend and, when a live schema upgrade was attempted, restores the offline database backup before restarting the previous backend. It refuses to restart if database recovery verification fails. No arbitrary schema migrations are allowed.
+Run these read-only commands in the existing administrator session. Inspect any sensitive output locally.
 
-**Trade-off:** in-place deployment causes a short maintenance window, and rollback is best-effort. Appropriate for the hackathon MVP, not a zero-downtime production design.
-
-## One-time setup — do not enable CD until completed
-
-### A. Confirm which database is authoritative
-
-Original `/root/apps/Timmy/timmy.db` had one extra audit event and one active login session versus `/opt/timmy/timmy.db`. Other records have been verified to match by the operator. Preserve the previously made backups, including `/root/timmy-original-20261114-204033.db` and `/root/timmy-deployed-20261114-204033.db`. For the one-checkout approach, use `/root/apps/Timmy/timmy.db` as the authoritative database, preserving audit evidence. Do not overwrite it with the older deployed copy. This will invalidate nothing automatically; existing sessions may be expired or revoked separately.
-
-### B. Make systemd the only backend owner
-
-Manual root Uvicorn was started using:
-
-```bash
-cd /root/apps/Timmy
-.venv/bin/python -m uvicorn backend.timmy.main:app --host 127.0.0.1 --port 8000
+```sh
+sudo ss -ltnp '( sport = :80 or sport = :8000 or sport = :8001 or sport = :11434 )'
+sudo systemctl show timmy-api -p MainPID -p User -p WorkingDirectory -p FragmentPath
+sudo nginx -T
+sudo git -C /root/apps/Timmy rev-parse HEAD
+sudo find /root/apps/Timmy -maxdepth 2 -type d
+sudo lsof -nP -p "$(sudo systemctl show timmy-api -p MainPID --value)"
 ```
 
-This is the **confirmed import path**. Stop this manual process gracefully (CN can press Ctrl+C) and verify port 8000 is free. If any real users are active, schedule a brief maintenance window.
+Resolve settings under the running service's user, working directory and environment. Compare the result with its open file descriptors. The following command covers the original root service when systemd supplies no settings overrides.
 
-Replace `/etc/systemd/system/timmy-api.service` with:
+```sh
+sudo bash -c 'cd /root/apps/Timmy && PYTHONPATH=backend .venv/bin/python -' <<'PY'
+from pathlib import Path
+from sqlalchemy.engine import make_url
+from timmy.config import settings
 
-```ini
-[Unit]
-Description=Agent Timmy FastAPI (hackathon)
-After=network-online.target ollama.service
-Wants=network-online.target
-
-[Service]
-Type=simple
-User=root
-WorkingDirectory=/root/apps/Timmy
-Environment=PYTHONUNBUFFERED=1
-ExecStart=/root/apps/Timmy/.venv/bin/python -m uvicorn backend.timmy.main:app --host 127.0.0.1 --port 8000
-Restart=on-failure
-RestartSec=5
-UMask=0077
-NoNewPrivileges=true
-PrivateTmp=true
-
-[Install]
-WantedBy=multi-user.target
+config = settings()
+url = make_url(config.database_url)
+assert url.get_backend_name() == "sqlite" and url.database
+print("SQLite:", Path(url.database).resolve())
+print("Documents:", config.document_root.expanduser().resolve())
+print("Origin:", config.frontend_origin)
+print("Weekly scheduler:", config.weekly_enabled)
+print("Voice cache:", config.whisper_cache.expanduser().resolve())
+print("Voice model:", config.piper_model.expanduser().resolve())
+PY
 ```
 
-The choice of root service user is a conscious MVP trade-off because the existing checkout is under `/root`; moving it to a non-root checkout would be safer. Never expose port 8000 publicly. Run:
+Verify the database revision with `sqlite3 -readonly "$DATABASE" 'SELECT version_num FROM alembic_version'`. Inspect systemd and Nginx settings locally before choosing paths. Account for overrides, additional mount points, uploaded documents, backups, logs, and model caches. Keep both preexisting database copies until the authoritative one is confirmed.
 
-```bash
-systemctl daemon-reload
-systemctl enable --now timmy-api
-systemctl is-active timmy-api
-ss -ltnp '( sport = :8000 )'
-curl -fsS http://127.0.0.1:8000/api/health
-```
+## Bootstrap on the existing host
 
-The PID listening on 8000 must match `systemctl show timmy-api -p MainPID`.
+1. Temporarily set the GitHub repository variable `TIMMY_DEPLOY_ENABLED=false` before merging this change. Keep the existing service and site running while preparing the new layout.
+2. Create a dedicated system user and group named `timmy` with no login or sudo. Create root-owned `/opt/timmy-deploy`, `releases`, and `backups`. Allow directory traversal to releases and keep backups root-only. Prepare `/opt/timmy-deploy/shared/{data,uploads,logs}`. Use the actual storage found above. Copy the production `.env` byte-for-byte to `shared/.env` with owner root, group timmy and mode 0640. Preserve Ollama's service and data. If voice is enabled, make its existing model and cache available to the new user.
+3. Use a consistent SQLite `.backup` and check it with `PRAGMA integrity_check`. Initial storage relocation needs a coordinated write freeze and final database backup and document sync. During that freeze, configure the legacy backend and new slots to use the **same** verified writable database and document paths before resuming traffic. Copy logs independently and preserve the originals. If the existing live paths are already accessible to the non-root user, point both services there and skip relocation. Never sync a stale database over live writes. Keep the original checkout, configuration, and backup. Once writes resume, legacy rollback must use the shared authoritative data.
+4. Create root-owned `/etc/timmy/deploy.conf` with mode 0600. Set `REPOSITORY` to the verified Git checkout for fetching, `DATABASE` to the absolute shared SQLite file, `PUBLIC_ORIGIN` to `http://157.230.128.215`, `NGINX_INCLUDE` to `/etc/timmy/nginx-active.conf`, and `LEGACY_UNIT`, `LEGACY_WEB` and `LEGACY_SHA` to their inspected values. Set `BUILD_PATH` to the normal system path plus Node.js 22 installed where `timmy` can execute it. Verify Python 3.12, venv, npm, git, sqlite3, rsync, flock and curl. Ensure the original service owns port 8000 and port 8001 is free.
+5. Create root-owned `/etc/timmy/runtime.conf` with mode 0600, using systemd EnvironmentFile syntax. Set `TIMMY_DATABASE_URL=sqlite:////opt/timmy-deploy/shared/data/timmy.db` and `TIMMY_DOCUMENT_ROOT=/opt/timmy-deploy/shared/uploads` only if those are the verified shared paths. Set `TIMMY_EXPECTED_DATABASE` to the same absolute database file and `TIMMY_EXPECTED_ORIGIN=http://157.230.128.215`. Confirm the database parent, uploads and logs are writable by `timmy`. Preserve authentication, origin and Ollama configuration. Both backends must have the weekly scheduler off during overlap. The runtime check rejects an enabled scheduler pending a singleton scheduling strategy.
+6. Add `include /etc/timmy/nginx-active.conf;` inside the existing site `server` block. Move the site's existing static root directive to that include, preserving any existing SPA routing. Add these lines above it, substituting the inspected commit:
 
-### C. Install protected scripts and dependencies
+   ```nginx
+   # 8000 <legacy-40-character-sha>
+   set $timmy_backend http://127.0.0.1:8000;
+   ```
 
-On the server as root (after PR merge), run:
+   Change the existing API location's upstream to `proxy_pass $timmy_backend;` if it currently preserves the request URI. If it rewrites paths, reproduce and test its URI behavior before proceeding. Preserve proxy headers, TLS, and streaming configuration. Do not set a short Nginx worker shutdown timeout. Run `sudo nginx -t && sudo systemctl reload nginx`, then verify the original public API and frontend. Keep a copy of the original site configuration.
+7. Install the reviewed files from a separate checkout, with root as owner. Keep the receiver and constrained sudoers rule for `timmy-deploy`.
 
-```bash
-cd /root/apps/Timmy
-git fetch origin main
-git reset --hard origin/main
-install -o root -g root -m 700 ops/deploy/deploy-server.sh /usr/local/sbin/timmy-deploy
-install -o root -g root -m 755 ops/deploy/receive.sh /usr/local/bin/timmy-receive
-command -v rsync git sqlite3 curl flock
-test -x /root/.local/bin/uv
-test -x /root/apps/Timmy/.venv/bin/python
-```
+   ```sh
+   sudo install -d -m 755 /usr/local/libexec
+   sudo install -o root -g root -m 700 ops/deploy/deploy-server.sh /usr/local/sbin/timmy-deploy
+   sudo install -o root -g root -m 755 ops/deploy/receive.sh /usr/local/bin/timmy-receive
+   sudo install -o root -g root -m 755 ops/deploy/check-runtime.py /usr/local/libexec/timmy-check-runtime
+   sudo install -o root -g root -m 644 ops/deploy/timmy-api@.service /etc/systemd/system/
+   sudo systemctl daemon-reload
+   ```
 
-Ensure Node.js 22 and npm are installed for root, including in non-interactive system sessions (the script loads root nvm where available). Verify Nginx is serving `/var/www/timmy`.
+8. If the active release is still on revision `0016`, run `sudo /usr/local/sbin/timmy-deploy --bridge`. This builds the verified legacy SHA and changes only the health check to accept both `0016` and `0017`. Verify the bridge on port 8001 before enabling the pipeline. The first candidate may apply the reviewed, pinned additive receipt migration while the bridge serves requests. The existing authoritative storage under `/opt/timmy` can remain in place. Keep the new release metadata under root-owned `/opt/timmy-deploy`.
+9. Configure production environment secrets `TIMMY_DEPLOY_SSH_KEY` and `TIMMY_DEPLOY_KNOWN_HOSTS` from the dedicated restricted key and the verified host key. Verify repository variables `TIMMY_DEPLOY_HOST` and `TIMMY_DEPLOY_PORT`. Set both deployment variables to true and rerun the verified push CI. Observe a long-running request during the switch and verify existing sessions, documents, frontend assets, and production health.
 
-### D. Restrict SSH GitHub Actions trigger
+## Operation and rollback
 
-Create `timmy-deploy` as a **non-sudo** service account:
-
-```bash
-id timmy-deploy || useradd -m -s /bin/bash timmy-deploy
-install -d -o timmy-deploy -g timmy-deploy -m 700 /home/timmy-deploy/.ssh
-```
-
-Generate a dedicated Ed25519 key pair on CN's trusted computer; put its **public** key in `/home/timmy-deploy/.ssh/authorized_keys` prefixed by:
-
-```text
-restrict,command="/usr/local/bin/timmy-receive"
-```
-
-Owner `timmy-deploy:timmy-deploy`, mode 600 for authorized_keys. Do not paste private keys or passwords into chat.
-
-Allow only the validated root-owned deployer to run via sudo:
-
-```bash
-printf '%s\n' 'timmy-deploy ALL=(root) NOPASSWD: /usr/local/sbin/timmy-deploy *' >/etc/sudoers.d/timmy-deploy
-chmod 440 /etc/sudoers.d/timmy-deploy
-visudo -cf /etc/sudoers.d/timmy-deploy
-```
-
-The deployer accepts **exactly** one 40-character hexadecimal SHA and checks it against GitHub main. The SSH account must not have general sudo membership.
-
-Verify the Ubuntu host's SSH public host key fingerprint through the trusted server console. Store the verified `known_hosts` line as GitHub environment secret `TIMMY_DEPLOY_KNOWN_HOSTS`. Store the trigger key **private** contents as environment secret `TIMMY_DEPLOY_SSH_KEY`.
-
-### E. GitHub configuration
-
-Create environment `production` with branch restriction `main` where available.
-
-Repository Actions variables:
-- `TIMMY_DEPLOY_HOST`: public IP or hostname
-- `TIMMY_DEPLOY_PORT`: port (typically `22`)
-- `TIMMY_DEPLOY_ENABLED`: **false** until initial manual verification; then **true**
-- `TIMMY_DEPLOY_V2_READY`: **unset/false** until CN has confirmed the API is healthy and installed the reviewed, root-owned deployment script. Only CN should change it to **true** after checking the installed-script SHA. This keeps auto-deployment paused even if the legacy enabled flag is true.
-
-CI actions must pass and `main` should be PR-protected.
-
-### F. First controlled test and activation
-
-After the service is healthy, **do not run the deploy script for the currently checked-out commit**, because it will exit as already deployed. Instead, make a harmless PR that changes a UI string or documentation, merge after green CI, and only then activate `TIMMY_DEPLOY_ENABLED=true` for a subsequent small PR to exercise CD.
-
-If CD fails, leave it disabled, examine the GitHub job logs and `journalctl -u timmy-api`, and confirm the API health endpoint. Never reset or delete SQLite to fix a pipeline issue.
-
-## Security & data precautions
-
-- `.env` and `timmy.db` remain ignored, local, and uncommitted.
-- Keep backup files owned by root and outside the public web root.
-- `TIMMY_COOKIE_SECURE=false` with public port 80 is unsafe for login. Use SSH tunneling until HTTPS and `TIMMY_COOKIE_SECURE=true` are configured.
-- Production schema upgrades are **fail-closed by default**. The deployment script explicitly allows only previously reviewed additive migration **0016 → 0017** as part of an exact-SHA rollout, after stopping the API and taking a consistent offline SQLite backup. It restores the backup if deployment fails. Any later migration requires separate code review and an updated allowlist.
-- The production server runs a **root-owned installed copy** of the deployment script at `/usr/local/sbin/timmy-deploy`. **CN must review and reinstall the updated script manually** before attempting the next automatic deployment; merging repository changes alone cannot update the installed root script. The forced-command SSH account must remain unchanged.
-- A failed previous deployment may have left `timmy-api` unhealthy despite resetting the Git checkout. CN must verify `systemctl is-active timmy-api`, listener ownership, `/api/health`, and the live database revision before re-enabling the pipeline. Do not reset or migrate the live DB until that health check passes.
-- The in-place rollout will cause brief downtime during dependency installation and tests. This is an explicit MVP trade-off.
-- Root-run backend increases risk; preserve loopback-only API/Ollama, restricted SSH, and no broad sudo for deployment account.
-
-## Explicit CD recovery gate (November 2026)
-
-1. CN verifies the API is healthy at the previous version and confirms **`timmy.db`** in the single root checkout is the authoritative live SQLite database. Do not overwrite it from an older backup.
-2. CN installs reviewed `ops/deploy/deploy-server.sh` as `/usr/local/sbin/timmy-deploy` with root ownership and mode 700, checks the SHA of installed file against the checked-out file, and confirms the restricted SSH deployment user cannot modify the script. No SSH deploy permission change is required.
-3. CN sets GitHub Actions variable `TIMMY_DEPLOY_V2_READY=true` **only after** that installation and health check. Until then, the new main merge will run CI but GitHub Deploy will skip its production job.
-3. On the next verified main SHA, the script stops the API, takes an **offline** SQLite `.backup`, validates integrity and foreign keys, then tests against an isolated source copy with no production `.env`. Production settings cannot contaminate tests.
-4. Only when current revision is **0016** and target is **0017**, the script applies the known additive migration to the live DB while the API is stopped and revalidates the exact revision, `integrity_check`, and `foreign_key_check`. If already 0017, no live migration is attempted. Other mismatches are blocked.
-5. On any failed deployment after migration starts, the script restores code, frontend, and the **offline DB backup**. If DB restoration fails, it leaves the API stopped and prints the backup path for CN's manual recovery. The GitHub job must remain failed.
-6. Finally, CN verifies API health and migration revision, and records the live SHA. GitHub CI passing by itself does not prove a healthy server.
+- `/api/live` checks the process. `/api/health` checks database access and the required schema revision. Systemd validates effective configuration before startup.
+- The deployer checks for an unchanged Alembic tree and exact revision match, then takes and verifies a consistent SQLite backup. The only automatic schema change is the pinned additive migration from 0016 to 0017 with the compatible bridge active. Other pending, rewritten or unreviewed migrations fail closed. Plan schema changes separately using expand-and-contract compatibility or a maintenance window. The deployer never restores a backup over live writes.
+- The backend and frontend switch together in one atomically replaced Nginx include. Production assets use `/api` and older hashes are carried forward. The deployer checks the public HTML and entry asset. Keep release directories and their assets until an operator has verified they are outside the retention window and unreferenced by current, previous, either slot, or active Nginx workers. There is no automated deletion of completed releases.
+- The deployment waits for the old Nginx worker processes to exit before stopping the previous backend. Weekly background scheduling must be off. If old workers remain after four minutes, the previous service stays up and the next deploy refuses to reuse its port. Verify the workers and any direct loopback traffic have drained before disabling and stopping that service.
+- A failed readiness check leaves the original route in place. A post-switch failure restores the saved routing when the old backend is healthy. The candidate stays up to drain. Inspect Nginx workers before stopping it. If automatic restoration fails, leave both slots running and repair routing from the last verified release.
+- After two versioned releases, run `sudo /usr/local/sbin/timmy-deploy --rollback` (or `sudo ops/deploy/rollback.sh`) to health-check the retained release on the standby slot and switch back. For the initial migration, rollback manually using the saved legacy Nginx configuration and original service, confirming that it still points to the authoritative shared database and document directory. Rollback never rewinds the database.

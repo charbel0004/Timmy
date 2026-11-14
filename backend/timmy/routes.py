@@ -24,6 +24,11 @@ def session_view(principal: Principal, demo_mode: bool) -> SessionView:
     )
 
 
+@router.get("/live")
+def live():
+    return {"status": "ok"}
+
+
 @router.get("/health")
 def health(db: Database):
     try:

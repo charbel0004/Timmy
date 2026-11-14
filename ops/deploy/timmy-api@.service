@@ -1,0 +1,22 @@
+[Unit]
+Description=Timmy API on loopback port %i
+After=network.target
+
+[Service]
+Type=simple
+User=timmy
+Group=timmy
+WorkingDirectory=/opt/timmy-deploy/shared
+EnvironmentFile=/etc/timmy/runtime.conf
+Environment=PYTHONPATH=/opt/timmy-deploy/slot-%i/backend
+ExecStartPre=/opt/timmy-deploy/slot-%i/.venv/bin/python /usr/local/libexec/timmy-check-runtime
+ExecStart=/opt/timmy-deploy/slot-%i/.venv/bin/python -m uvicorn timmy.main:app --app-dir /opt/timmy-deploy/slot-%i/backend --host 127.0.0.1 --port %i --timeout-graceful-shutdown 240
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=250
+NoNewPrivileges=true
+PrivateTmp=true
+UMask=0027
+
+[Install]
+WantedBy=multi-user.target

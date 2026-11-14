@@ -51,16 +51,15 @@ def test_isolated_backend_checks_ignore_hostile_checkout_env(tmp_path):
     assert not (scratch / "source" / ".env").exists()
 
 
-def test_live_deploy_migration_is_narrow_and_restores_before_restart():
+def test_live_deploy_uses_reviewed_migration_without_database_restore():
     script = SCRIPT.read_text(encoding="utf-8")
-    assert '[[ "$live_revision" != 0016 || "$desired_revision" != 0017 ]]' in script
-    assert 'migration_attempted=true' in script
-    assert 'sqlite3 timmy.db ".restore' in script
-    assert 'if [[ "$recovery_ok" == true ]]; then' in script
-    assert 'systemctl start timmy-api' in script
-    assert script.index('sqlite3 timmy.db ".restore') < script.index('if [[ "$recovery_ok" == true ]]; then')
-    assert 'bash "$isolated_checks"' in script
-    assert 'systemctl daemon-reload' in script
+    assert '[[ $revision == 0016 && $expected == 0017 ]]' in script
+    assert 'aea0fbd39b71978cac927a4ec859ec817332ab48' in script
+    assert '.schema-bridge' in script
+    assert 'PRAGMA integrity_check' in script
+    assert '".restore' not in script
+    assert 'pytest' not in script
+    assert script.index('wait_health "http://127.0.0.1:$slot"') < script.index('write_route "$release/')
     deploy_yaml = (ROOT / ".github" / "workflows" / "deploy.yml").read_text()
     assert "vars.TIMMY_DEPLOY_V2_READY == 'true'" in deploy_yaml
 

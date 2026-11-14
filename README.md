@@ -100,3 +100,7 @@ JSON/SQLite releases. It has no runtime API, policy activation or financial tool
 the application does not consume its artifacts. See
 [the compiler contract](docs/implementation/COMPILER_CONTRACT_v0.1.md) for trust
 requirements and the remaining authorized retrieval/trace integration work.
+
+## Production deployment
+
+See the [production deployment runbook](ops/deploy/README.md) for host preflight, release setup and rollback.

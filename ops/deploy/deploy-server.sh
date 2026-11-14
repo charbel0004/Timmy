@@ -1,179 +1,250 @@
 #!/usr/bin/env bash
-# Hackathon MVP: guarded one-checkout deploy, isolated tests, specific schema upgrade.
-# Installed as root-owned /usr/local/sbin/timmy-deploy.
+# Install as root-owned /usr/local/sbin/timmy-deploy.
 set -Eeuo pipefail
-umask 077
+umask 027
 
-if [[ $EUID -ne 0 || $# -ne 1 || ! "$1" =~ ^[0-9a-f]{40}$ ]]; then
-  echo 'Usage (root): timmy-deploy <40-character main SHA>' >&2
-  exit 2
-fi
+die() { echo "$*" >&2; exit 1; }
+[[ $EUID == 0 && $# == 1 ]] || die 'Run as root with an exact commit SHA or --bridge or --rollback'
+requested=$1
+[[ $requested == --rollback || $requested == --bridge || $requested =~ ^[0-9a-f]{40}$ ]] || die 'Invalid release identifier'
 
-requested="$1"
-repo=/root/apps/Timmy
-web=/var/www/timmy
-backups=/root/timmy-backups
-uv=/root/.local/bin/uv
-isolated_checks="$repo/ops/deploy/run-isolated-backend-checks.sh"
-
-cd "$repo"
+base=/opt/timmy-deploy
+config=/etc/timmy/deploy.conf
+[[ -f $config ]] || die 'Complete the production preflight before installing the deployer'
+# Root-owned operator configuration, never sourced from a release.
+source "$config"
+: "${REPOSITORY:?}" "${DATABASE:?}" "${PUBLIC_ORIGIN:?}" "${NGINX_INCLUDE:?}" "${LEGACY_UNIT:?}" "${LEGACY_WEB:?}" "${LEGACY_SHA:?}" "${BUILD_PATH:?}"
 exec 9>/run/lock/timmy-deploy.lock
 flock -w 600 9
+cd "$base"
 
-[[ -x "$uv" && -x .venv/bin/python && -f .env && -f timmy.db ]] || {
-  echo 'Missing existing Python environment, config, or database' >&2; exit 1;
+health() {
+  curl -fsS --max-time 3 "$1/api/health" | grep -Eq '"status"[[:space:]]*:[[:space:]]*"ok"'
 }
-[[ -d "$web" ]] || { echo 'Missing Nginx static web root' >&2; exit 1; }
 
-# Refuse a running backend outside systemd. The first cutover is manual.
-service_pid="$(systemctl show -p MainPID --value timmy-api)"
-if ! systemctl is-active --quiet timmy-api || [[ "$service_pid" == 0 ]] ||
-   ! ss -ltnp '( sport = :8000 )' | grep -q "pid=$service_pid,"; then
-  echo 'timmy-api must own port 8000 before automated deployments' >&2
-  exit 1
-fi
+wait_health() {
+  for attempt in {1..30}; do
+    if health "$1"; then return; fi
+    sleep 2
+  done
+  return 1
+}
 
-# Origin/main must be exactly the SHA that passed the GitHub CI workflow.
-git fetch --no-tags origin main
-head="$(git rev-parse FETCH_HEAD)"
-[[ "$head" == "$requested" ]] || {
-  echo "Superseded or unexpected commit: $requested (main is $head)" >&2; exit 1;
+switch_link() {
+  ln -sfn "$1" "$2.next"
+  mv -Tf "$2.next" "$2"
 }
-[[ -z "$(git status --porcelain --untracked-files=no)" ]] || {
-  echo 'Tracked checkout files have local changes; refusing to overwrite' >&2; exit 1;
+
+write_route() {
+  local web=$1 port=$2 sha=$3
+  {
+    printf '# %s %s\n' "$port" "$sha"
+    printf 'set $timmy_backend http://127.0.0.1:%s;\n' "$port"
+    printf 'root %s;\n' "$web"
+  } > "$NGINX_INCLUDE.next"
+  mv -Tf "$NGINX_INCLUDE.next" "$NGINX_INCLUDE"
 }
-previous="$(git rev-parse HEAD)"
-if [[ "$previous" == "$requested" ]]; then
+
+read -r marker active active_sha < "$NGINX_INCLUDE"
+[[ $marker == '#' && $active =~ ^800[01]$ && $active_sha =~ ^[0-9a-f]{40}$ ]] || die 'Invalid active routing metadata'
+health "http://127.0.0.1:$active" || die 'Active backend is unhealthy'
+[[ $(sqlite3 -readonly "$DATABASE" 'SELECT version_num FROM alembic_version') =~ ^[a-zA-Z0-9_]+$ ]] ||
+  die 'Cannot establish production schema revision'
+if [[ $active_sha == "$requested" && -L $base/current ]]; then
   echo "Already deployed $requested"
   exit 0
 fi
 
-# Temporary test data and static-file rollback copy, NOT a release directory.
-temp="$(mktemp -d /tmp/timmy-deploy.XXXXXXXX)"
-rsync -a "$web/" "$temp/previous-web/"
+slot=$((16001 - active))
+unit="timmy-api@$slot.service"
+active_unit="timmy-api@$active.service"
+if [[ ! -L $base/current ]]; then
+  [[ $active == 8000 && $active_sha == "$LEGACY_SHA" ]] || die 'Legacy routing differs from the inspected baseline'
+  active_unit=$LEGACY_UNIT
+else
+  [[ $(readlink "$base/current") == "$base/releases/$active_sha" ]] ||
+    die 'Current release differs from the active Nginx route'
+fi
+systemctl is-active --quiet "$active_unit" || die "Expected active unit $active_unit"
+if systemctl is-active --quiet "$unit" || [[ -n $(ss -Hlt "( sport = :$slot )") ]]; then
+  die "Standby port $slot is occupied or still draining"
+fi
 
-mkdir -p -m 700 "$backups"
-stamp="$(date -u +%Y%m%d-%H%M%S)"
-backup_file="$backups/timmy-$stamp.db"
-original_revision="$(sqlite3 timmy.db 'SELECT version_num FROM alembic_version LIMIT 1')"
+rollback=false
+bridge=false
+if [[ $requested == --bridge ]]; then
+  [[ ! -L $base/current ]] || die 'Bridge is only for the initial cutover'
+  bridge=true
+  requested=$LEGACY_SHA
+elif [[ $requested == --rollback ]]; then
+  rollback=true
+  requested=$(basename "$(readlink -e "$base/previous")")
+  [[ $requested =~ ^[0-9a-f]{40}$ && $requested != "$active_sha" ]] || die 'No retained release to roll back to'
+else
+  git -C "$REPOSITORY" fetch --no-tags origin main
+  [[ $(git -C "$REPOSITORY" rev-parse FETCH_HEAD) == "$requested" ]] || die 'Commit is no longer origin/main'
+fi
+echo "Active: $active_sha on $active; candidate: $requested on $slot"
 
-needs_restore=false
-migration_attempted=false
-web_changed=false
+# Admit only the reviewed additive 0017 file over the known bridge.
+migrations() { git -C "$REPOSITORY" rev-parse "$1:backend/migrations"; }
+migrate=false
+if [[ $(migrations "$active_sha") != "$(migrations "$requested")" ]]; then
+  if $rollback && [[ -f $base/releases/$requested/.schema-bridge ]]; then
+    echo 'Rollback to bridge supports revision 0017'
+  else
+    migration=backend/migrations/versions/0017_workflow_step_receipts.py
+    [[ -f $base/releases/$active_sha/.schema-bridge &&
+       $(git -C "$REPOSITORY" diff --name-status "$active_sha" "$requested" -- backend/migrations) == $'A\t'"$migration" &&
+       $(git -C "$REPOSITORY" rev-parse "$requested:$migration") == aea0fbd39b71978cac927a4ec859ec817332ab48 ]] ||
+      die 'Migration tree changed; requires compatibility review'
+    migrate=true
+  fi
+fi
+release="$base/releases/$requested"
+stage=
+candidate_started=false
+route_changed=false
+route_backup=$(mktemp /etc/timmy/route.XXXXXXXX)
+cp "$NGINX_INCLUDE" "$route_backup"
 cleanup() {
-  code="$?"
+  local code=$?
   trap - EXIT
   set +e
-  if [[ "$code" != 0 && "$needs_restore" == true ]]; then
-    echo 'Deployment failed: restoring prior checkout and restarting backend' >&2
-    cd "$repo" || exit "$code"
-    git reset --hard "$previous"
-    "$uv" pip install --python .venv/bin/python -r backend/requirements-dev.txt
-
-    # Forward-only migrations require restoration of the consistent offline
-    # backup if ANY later release gate fails. Never restart old code on 0017.
-    recovery_ok=true
-    if [[ "$migration_attempted" == true ]]; then
-      if ! sqlite3 timmy.db ".restore '$backup_file'" ||
-         [[ "$(sqlite3 timmy.db 'PRAGMA integrity_check')" != ok ]] ||
-         [[ "$(sqlite3 timmy.db 'SELECT version_num FROM alembic_version LIMIT 1')" != "$original_revision" ]]; then
-        recovery_ok=false
-        echo "DATABASE_RESTORE_FAILED: leave service stopped; inspect $backup_file" >&2
+  if (( code != 0 )); then
+    if $route_changed; then
+      if health "http://127.0.0.1:$active" && cp "$route_backup" "$NGINX_INCLUDE.next" &&
+           mv -Tf "$NGINX_INCLUDE.next" "$NGINX_INCLUDE" && nginx -t && systemctl reload nginx &&
+           wait_health "$PUBLIC_ORIGIN"; then
+        echo "Restored traffic to $active_sha; candidate retained for draining" >&2
+      else
+        echo "Routing rollback failed; both backends retained for operator recovery" >&2
       fi
-    fi
-    if [[ "$web_changed" == true ]]; then
-      rsync -a --delete "$temp/previous-web/" "$web/"
-    fi
-    if [[ "$recovery_ok" == true ]]; then
-      systemctl daemon-reload
-      systemctl start timmy-api
-      recovered=false
-      for i in {1..25}; do
-        if curl -fsS --max-time 2 http://127.0.0.1:8000/api/health 2>/dev/null |
-             grep -Eq '"status"[[:space:]]*:[[:space:]]*"ok"'; then
-          recovered=true
-          break
-        fi
-        sleep 2
-      done
-      [[ "$recovered" == true ]] ||
-        echo 'ROLLBACK_HEALTH_FAILED: operator must check timmy-api service' >&2
+    elif $candidate_started; then
+      systemctl stop "$unit" || true
     fi
   fi
-  [[ -n "$temp" ]] && rm -rf -- "$temp"
+  [[ -z $stage ]] || rm -rf -- "$stage"
+  rm -f -- "$route_backup"
   exit "$code"
 }
 trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
-export NVM_DIR=/root/.nvm
-if [[ -s "$NVM_DIR/nvm.sh" ]]; then
-  # Node 22 installed via nvm in the original root checkout.
-  source "$NVM_DIR/nvm.sh"
-  nvm use 22 >/dev/null
-fi
-node -e 'process.exit(Number(process.versions.node.split(".")[0]) >= 22 ? 0 : 1)'
-command -v npm >/dev/null
+if [[ ! -f $release/.prepared ]]; then
+  $rollback && die 'Rollback release is incomplete'
+  [[ ! -e $release ]] || die "Incomplete release at $release"
+  stage=$release
+  mkdir "$stage"
+  chown timmy:timmy "$stage"
+  echo "Preparing $requested with isolated Python and Node dependencies"
+  git -C "$REPOSITORY" archive "$requested" | runuser -u timmy -- tar -xf - -C "$stage"
+  if $bridge; then
+    # The old application does not use the new receipt table. Only broaden its
+    # readiness probe for the two explicitly supported schema revisions.
+    runuser -u timmy -- env PATH="$BUILD_PATH" python3.12 - "$stage/backend/timmy/routes.py" <<'PYTHON'
+import sys
+from pathlib import Path
 
-needs_restore=true
-systemctl stop timmy-api
-
-# Take an OFFLINE, consistent snapshot after stopping the only API writer.
-# Never use the pre-stop backup for rollback: it can miss in-flight writes.
-sqlite3 timmy.db ".backup '$backup_file'"
-[[ "$(sqlite3 "$backup_file" 'PRAGMA integrity_check')" == ok ]] || exit 1
-[[ -z "$(sqlite3 "$backup_file" 'PRAGMA foreign_key_check')" ]] || exit 1
-[[ "$(sqlite3 "$backup_file" 'SELECT version_num FROM alembic_version LIMIT 1')" == "$original_revision" ]] || exit 1
-
-git reset --hard "$requested"
-
-"$uv" pip install --python .venv/bin/python -r backend/requirements-dev.txt
-
-# Production .env MUST NOT leak into tests. The helper copies only backend
-# source to a temporary root and runs tests with env -i on a disposable DB.
-[[ -f "$isolated_checks" ]] || {
-  echo 'Missing isolated test runner in requested commit' >&2; exit 1;
-}
-bash "$isolated_checks" "$repo" "$repo/.venv/bin/python" "$temp"
-
-# This one-time release has an explicitly reviewed ADDITIVE migration.
-# No unknown future migrations are permitted by unattended CD.
-live_revision="$(sqlite3 timmy.db 'SELECT version_num FROM alembic_version LIMIT 1')"
-desired_revision="$(.venv/bin/python -m alembic -c backend/alembic.ini heads | awk 'NR==1 {print $1}')"
-if [[ "$live_revision" != "$desired_revision" ]]; then
-  if [[ "$live_revision" != 0016 || "$desired_revision" != 0017 ]]; then
-    echo "SCHEMA_CHANGE_NOT_APPROVED: live=$live_revision expected=$desired_revision" >&2
-    exit 1
+routes = Path(sys.argv[1])
+source = routes.read_text()
+old = "WHERE version_num = '0016'"
+assert source.count(old) == 1
+routes.write_text(source.replace(old, "WHERE version_num IN ('0016', '0017')"))
+PYTHON
+    touch "$stage/.schema-bridge"
   fi
-  echo 'APPLYING_APPROVED_SCHEMA_MIGRATION 0016 -> 0017'
-  migration_attempted=true
-  # Explicit database URL overrides the application's .env. The API is stopped.
-  TIMMY_DATABASE_URL="sqlite:///$repo/timmy.db" PYTHONPATH="$repo/backend"     .venv/bin/python -m alembic -c backend/alembic.ini upgrade 0017
-  [[ "$(sqlite3 timmy.db 'SELECT version_num FROM alembic_version LIMIT 1')" == 0017 ]]
-  [[ "$(sqlite3 timmy.db 'PRAGMA integrity_check')" == ok ]]
-  [[ -z "$(sqlite3 timmy.db 'PRAGMA foreign_key_check')" ]]
-  echo 'APPROVED_SCHEMA_MIGRATION_VERIFIED'
+  runuser -u timmy -- env PATH="$BUILD_PATH" bash -c '
+    set -e
+    cd "$1"
+    python3.12 -m venv .venv
+    .venv/bin/python -m pip install --quiet -r backend/requirements.txt
+    npm ci --prefix frontend
+    VITE_API_URL=/api npm run build --prefix frontend
+    test -s frontend/dist/index.html
+  ' _ "$stage"
+  if [[ -d $LEGACY_WEB/assets ]]; then
+    install -d "$stage/frontend/dist/assets"
+    rsync -rt --ignore-existing "$LEGACY_WEB/assets/" "$stage/frontend/dist/assets/"
+  fi
+  if [[ -L $base/current ]]; then
+    rsync -rt --ignore-existing "$base/current/frontend/dist/assets/" "$stage/frontend/dist/assets/"
+  fi
+  chmod 755 "$stage" "$stage/frontend" "$stage/frontend/dist"
+  chmod -R a+rX "$stage/frontend/dist"
+  ln -s "$base/shared/.env" "$stage/.env"
+  ln -s "$base/shared/logs" "$stage/logs"
+  touch "$stage/.prepared"
+  stage=
 fi
 
-npm ci --prefix frontend
-npm test --prefix frontend
-VITE_API_URL=/api npm run build --prefix frontend
-[[ -s frontend/dist/index.html && -d frontend/dist/assets ]]
+revision=$(sqlite3 -readonly "$DATABASE" 'SELECT version_num FROM alembic_version')
+expected=$(runuser -u timmy -- "$release/.venv/bin/python" -m alembic -c "$release/backend/alembic.ini" heads | awk '{print $1}')
+if [[ $revision != "$expected" ]]; then
+  if [[ $revision == 0016 && $expected == 0017 ]] && $migrate; then
+    echo 'Reviewed additive migration 0016 -> 0017'
+  elif [[ $revision == 0017 && -f $release/.schema-bridge ]]; then
+    echo 'Bridge is compatible with 0017'
+  else
+    die 'Live schema differs from candidate; no automatic schema change'
+  fi
+fi
+backup=$(mktemp "$base/backups/timmy.XXXXXXXX")
+sqlite3 -readonly "$DATABASE" ".backup '$backup'"
+[[ $(sqlite3 -readonly "$backup" 'PRAGMA integrity_check') == ok ]] || die 'SQLite backup failed integrity check'
+echo 'SQLite backup verified'
+if $migrate && [[ $revision == 0016 ]]; then
+  runuser -u timmy -- env TIMMY_DATABASE_URL="sqlite:///$DATABASE" PYTHONPATH="$release/backend" \
+    "$release/.venv/bin/python" -m alembic -c "$release/backend/alembic.ini" upgrade 0017
+  [[ $(sqlite3 -readonly "$DATABASE" 'SELECT version_num FROM alembic_version') == 0017 ]]
+  health "http://127.0.0.1:$active" || die 'Bridge health failed after additive migration'
+fi
+switch_link "$release" "$base/slot-$slot"
+candidate_started=true
+systemctl start "$unit"
+wait_health "http://127.0.0.1:$slot" || die 'Standby readiness failed'
+echo "Backend on $slot is ready"
+if $bridge; then
+  echo "Bridge ready on $slot"
+elif ! $rollback; then
+  git -C "$REPOSITORY" fetch --no-tags origin main
+  [[ $(git -C "$REPOSITORY" rev-parse FETCH_HEAD) == "$requested" ]] ||
+    die 'Commit was superseded during preparation'
+else
+  rsync -rt --ignore-existing "$base/current/frontend/dist/assets/" "$release/frontend/dist/assets/"
+fi
 
-web_changed=true
-rsync -a --delete frontend/dist/ "$web/"
-systemctl daemon-reload
-systemctl start timmy-api
+# Record old workers before the reload; their connections still target the old slot.
+nginx_master=$(systemctl show -p MainPID --value nginx)
+[[ $nginx_master =~ ^[1-9][0-9]*$ ]] || die 'Cannot locate Nginx master'
+workers=$(pgrep -P "$nginx_master" || true)
+[[ -n $workers ]] || die 'Cannot identify workers to drain'
+route_changed=true
+write_route "$release/frontend/dist" "$slot" "$requested"
+nginx -t
+systemctl reload nginx
+wait_health "$PUBLIC_ORIGIN" || die 'Public API health check failed'
+asset=$(grep -oE '/assets/[^" ]+\.js' "$release/frontend/dist/index.html" | head -1)
+[[ -n $asset ]] || die 'Candidate entry asset not found'
+curl -fsS --max-time 5 "$PUBLIC_ORIGIN/" | cmp - "$release/frontend/dist/index.html"
+curl -fsS --max-time 5 "$PUBLIC_ORIGIN$asset" -o /dev/null
+if [[ -L $base/current ]]; then switch_link "$(readlink "$base/current")" "$base/previous"; fi
+systemctl enable "$unit"
+switch_link "$release" "$base/current"
+echo "Deployed $requested on $slot; public backend and frontend verified"
 
-healthy=false
-for i in {1..25}; do
-  if curl -fsS --max-time 2 http://127.0.0.1:8000/api/health 2>/dev/null |
-       grep -Eq '"status"[[:space:]]*:[[:space:]]*"ok"'; then
-    healthy=true
-    break
+for attempt in {1..120}; do
+  draining=false
+  for worker in $workers; do
+    if kill -0 "$worker" 2>/dev/null; then draining=true; fi
+  done
+  if ! $draining; then
+    systemctl disable "$active_unit" || echo "Could not disable $active_unit" >&2
+    systemctl stop "$active_unit" || echo "Could not stop $active_unit" >&2
+    echo "Nginx drained; retired $active_unit"
+    exit 0
   fi
   sleep 2
 done
-[[ "$healthy" == true ]] || { echo 'Backend health check failed' >&2; exit 1; }
-needs_restore=false
-printf '%s\n' "$requested" > "$repo/.timmy-deployed-sha"
-echo "DEPLOYED $requested"
+echo "Nginx drain exceeded 240s; leaving $active_unit running for operator review"
