@@ -22,6 +22,7 @@ from .auth import Authenticated, Database, current_principal, require_csrf
 from .documents import project_report_cutoffs, resolve_documents
 from .models import WorkflowRun, projects
 from .session_preview import preview
+from .workflow_graph import execute_graph
 
 WorkflowID = Literal['analyze_intake', 'process_activity', 'weekly_cycle', 'payment_return',
                      'prepare_payment', 'show_issues', 'resolve_issues']
@@ -80,7 +81,10 @@ def clarification():
 
 
 def step_result(step, status, issues=(), **data):
-    return dict(step=step, status=status, issue_codes=list(issues), **data)
+    # A successful service outcome is the only case marked executed.
+    # A failed guard is attempted but must not be presented as an action.
+    return dict(step=step, status=status, issue_codes=list(issues),
+                attempted=True, executed=status == 'completed', **data)
 
 
 def run_workflow(db, principal, config, *, workflow_id, project_id, request_key,
@@ -157,50 +161,52 @@ def run_workflow(db, principal, config, *, workflow_id, project_id, request_key,
                           snapshot=snapshot, report_cutoffs=cutoffs, activity_registry=activity_registry,
                           project_codes=project_codes) if not damaged else None
     activities = snapshot['activities']
-    results = []
-    # All plans are loaded from knowledge. Known steps have explicit implementations;
-    # missing adapters never fall through to successful or financial execution.
-    for step in definitions[workflow_id].steps:
+    # LangGraph orchestrates reviewed backend handlers; it does not implement
+    # business policies, invent unavailable adapters, or invoke downstream steps.
+    def evaluate(step):
         if damaged:
-            result = step_result(step, 'blocked', ['SOURCE_INTEGRITY_FAILED'])
-        elif not documents:
-            result = step_result(step, 'blocked', ['NO_VISIBLE_DOCUMENTS'])
-        elif preflight_issues:
-            result = step_result(step, 'blocked', preflight_issues)
-        elif step == 'verify_intake':
-            result = step_result(step, 'completed', files=len(documents),
-                                 source_rows=sum(r.row_count for _, r in documents))
-        elif step == 'check_planning':
-            result = step_result(step, 'needs_review', ['PLANNING_AUTHORITY_REQUIRED'],
-                                 activities=len(activities))
-        elif step == 'check_reports':
+            return step_result(step, 'blocked', ['SOURCE_INTEGRITY_FAILED'])
+        if not documents and workflow_id not in {'payment_return','prepare_payment','resolve_issues','show_issues'}:
+            return step_result(step, 'blocked', ['NO_VISIBLE_DOCUMENTS'])
+        if preflight_issues:
+            return step_result(step, 'blocked', preflight_issues)
+        if step == 'verify_intake':
+            return step_result(step, 'completed', files=len(documents),
+                               source_rows=sum(record.row_count for _, record in documents))
+        if step == 'check_planning':
+            return step_result(step, 'needs_review', ['PLANNING_AUTHORITY_REQUIRED'],
+                               activities=len(activities))
+        if step == 'check_reports':
             missing = any((project_id, a['project_code'], a['activity_code']) not in cutoffs for a in activities)
-            result = step_result(step, 'blocked' if missing or not activities else 'completed',
-                                 ['REPORT_VALIDATION_EVIDENCE_REQUIRED'] if missing or not activities else [],
-                                 frozen_reports=len(cutoffs))
-        elif step == 'select_timesheets':
-            result = step_result(step, 'needs_review', ['APPROVED_PLANNED_REPORTED_SELECTION_REQUIRED'],
-                                 candidate_claims=len(snapshot['claims']))
-        elif step in {'validate_activity', 'show_discrepancies'}:
+            return step_result(step, 'blocked' if missing or not activities else 'completed',
+                               ['REPORT_VALIDATION_EVIDENCE_REQUIRED'] if missing or not activities else [],
+                               frozen_reports=len(cutoffs))
+        if step == 'select_timesheets':
+            return step_result(step, 'needs_review', ['APPROVED_PLANNED_REPORTED_SELECTION_REQUIRED'],
+                               candidate_claims=len(snapshot['claims']))
+        if step in {'validate_activity', 'show_discrepancies'}:
             codes = sorted({code for activity in activities for code in activity['issues']})
-            result = step_result(step, 'completed' if step == 'show_discrepancies' else 'needs_review',
-                                 [] if step == 'show_discrepancies' else ['AUTHORITATIVE_VALIDATION_ADAPTER_REQUIRED'],
-                                 activities=activities, structural_issue_codes=codes)
-        elif step == 'resolve_discrepancies':
-            result = step_result(step, 'needs_review', ['POLICY_RESOLUTION_ADAPTER_REQUIRED'],
-                                 recommendation='Review the recorded rule and source evidence. Apply only an explicitly policy-authorized correction; otherwise request an authorized human decision.')
-        else:
-            blockers = {
-                'prepare_payment_request': ['ELIGIBLE_CREDIT_ADAPTER_REQUIRED', 'EXACT_BATCH_APPROVAL_REQUIRED'],
-                'export_payment_request': ['APPROVED_PAYMENT_REQUEST_FILE_ADAPTER_REQUIRED', 'EXACT_BATCH_APPROVAL_REQUIRED'],
-                'receive_payment_report': ['TRUSTED_PAYMENT_REPORT_ADAPTER_REQUIRED'],
-                'reconcile_payments': ['PAYMENT_RECONCILIATION_ADAPTER_REQUIRED'],
-                'map_payments': ['VERIFIED_BATCH_MAPPING_REQUIRED'],
-                'archive_payment_evidence': ['RECONCILED_EVIDENCE_ARCHIVE_REQUIRED'],
-                'raise_payment_issues': ['PAYMENT_ISSUE_ADAPTER_REQUIRED'],
-            }
-            result = step_result(step, 'blocked', blockers.get(step, ['UNREGISTERED_WORKFLOW_STEP']))
-        results.append(result)
+            return step_result(step, 'completed' if step == 'show_discrepancies' else 'needs_review',
+                               [] if step == 'show_discrepancies' else ['AUTHORITATIVE_VALIDATION_ADAPTER_REQUIRED'],
+                               activities=activities, structural_issue_codes=codes,
+                               evidence_kind='provisional_structural_preview')
+        if step == 'resolve_discrepancies':
+            return step_result(step, 'needs_review', ['POLICY_RESOLUTION_ADAPTER_REQUIRED'],
+                               recommendation='Review the recorded rule and source evidence. Apply only an explicitly policy-authorized correction; otherwise request an authorized human decision.')
+        # No handler exists for payment authority or settlement. Their catalog
+        # entries are *not* automatically executable LangGraph tools.
+        blockers = {
+            'prepare_payment_request': ['ELIGIBLE_CREDIT_ADAPTER_REQUIRED', 'EXACT_BATCH_APPROVAL_REQUIRED'],
+            'export_payment_request': ['APPROVED_PAYMENT_REQUEST_FILE_ADAPTER_REQUIRED', 'EXACT_BATCH_APPROVAL_REQUIRED'],
+            'receive_payment_report': ['TRUSTED_PAYMENT_REPORT_ADAPTER_REQUIRED'],
+            'reconcile_payments': ['PAYMENT_RECONCILIATION_ADAPTER_REQUIRED'],
+            'map_payments': ['VERIFIED_BATCH_MAPPING_REQUIRED'],
+            'archive_payment_evidence': ['RECONCILED_EVIDENCE_ARCHIVE_REQUIRED'],
+            'raise_payment_issues': ['PAYMENT_ISSUE_ADAPTER_REQUIRED'],
+        }
+        return step_result(step, 'blocked', blockers.get(step, ['UNREGISTERED_WORKFLOW_STEP']))
+
+    results = execute_graph(definitions[workflow_id].steps, evaluate)
     status = ('blocked' if any(r['status'] == 'blocked' for r in results) else
               'needs_review' if any(r['status'] == 'needs_review' for r in results) else 'completed')
     run = WorkflowRun(actor_id=principal.user.id, project_id=project_id, request_key=request_key,
