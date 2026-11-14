@@ -22,6 +22,7 @@ from .repositories import visible_projects
 from .workflows import run_workflow, render_run
 from .documents import project_report_cutoffs
 from .conversation_workflow import handle_message, public_state, confirm_mapping
+from .failure_diagnostics import classify
 
 router = APIRouter(prefix="/api/chat/conversations")
 
@@ -176,8 +177,17 @@ async def send(conversation_id: UUID, payload: SendMessage, request: Request, pr
         record("Request stopped", status=error.status_code)
         raise
     except Exception as error:
-        record("Unexpected assistant error", error_type=type(error).__name__)
-        raise
+        failure = classify(error, step="CHAT_REQUEST")
+        record("Request failed safely", code=failure.code,
+               correlation_id=failure.correlation_id,
+               error_type=failure.exception_type)
+        # Return a stable, actionable incident reference, not sensitive
+        # exception text or a false success result.
+        raise HTTPException(500, {
+            "code": failure.code,
+            "correlation_id": failure.correlation_id,
+            "action": "Request authorized operator review; do not retry automatically",
+        }) from None
     record("Response ready")
     result["message"]["requestId"] = key[1]
     return result

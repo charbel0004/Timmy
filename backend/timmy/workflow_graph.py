@@ -8,6 +8,7 @@ No automatic retries, external effects, or financial writes are introduced.
 from __future__ import annotations
 
 import logging
+from uuid import uuid4
 from collections.abc import Callable, Sequence
 from typing import TypedDict
 
@@ -49,6 +50,7 @@ def safe_failure(step: str, code: str = "WORKFLOW_STEP_UNEXPECTED_ERROR") -> dic
         "issue_codes": [code],
         "attempted": True,
         "executed": False,
+        "diagnostic_ref": str(uuid4()),
     }
 
 
