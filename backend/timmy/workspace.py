@@ -6,8 +6,8 @@ from time import monotonic, time
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, HTTPException, Request, Response
-from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import delete, insert, literal, select, text, update
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+from sqlalchemy import delete, insert, select, text, update
 from sqlalchemy.exc import IntegrityError
 
 from .audit import audit
@@ -87,6 +87,13 @@ class Mode(Payload):
 class ProjectInput(Payload):
     name: str = Field(min_length=1, max_length=160)
     code: str = Field(min_length=1, max_length=80)
+
+    @field_validator('code')
+    @classmethod
+    def valid_prefix(cls, value):
+        if not value[0].isalnum() or any(not c.isalnum() and c not in '-_' for c in value):
+            raise ValueError('Project code prefix must use letters, digits, hyphens or underscores')
+        return value
 
 
 class ProjectCreate(ProjectInput):
@@ -339,9 +346,17 @@ def create_project(body: ProjectCreate, request: Request, principal: Authenticat
 def edit_project(identifier: int, body: ProjectInput, request: Request, principal: Authenticated, db: Database):
     principal.require("projects:manage")
     require_csrf(request, principal)
+    db.rollback()
+    db.execute(text('BEGIN IMMEDIATE'))
+    principal = current_principal(request, db)
+    principal.require('projects:manage')
+    require_csrf(request, principal)
     row = project(db, identifier)
     if row["status"] == "archived":
         raise HTTPException(409, "Restore the project before editing")
+    if body.code != row['project_code'] and db.scalar(select(activities.c.id).where(
+            activities.c.project_id==identifier, activities.c.activity_code.is_not(None)).limit(1)):
+        raise HTTPException(409,'Project code prefix is permanent once planning activities exist')
     try:
         db.execute(update(projects).where(projects.c.id == identifier, projects.c.status == row["status"])
                    .values(name=body.name, project_code=body.code))
@@ -393,7 +408,9 @@ def remove_project(identifier: int, confirmed: bool, request: Request, principal
 @router.get("/activities")
 def list_activities(principal: Authenticated, db: Database):
     principal.require("projects:read")
-    query = select(activities.c.id, activities.c.name, projects.c.name.label("project")).join(projects)
+    query = select(activities.c.id, activities.c.name, activities.c.activity_code,
+                   activities.c.planned_start, activities.c.planned_end, activities.c.code_authority,
+                   projects.c.name.label("project"), projects.c.project_code).join(projects)
     if "projects:manage" not in principal.permissions:
         query = query.where(projects.c.id.in_([key for key, permissions in principal.project_permissions.items() if "activities.view" in permissions]))
     return [dict(row) for row in db.execute(query.order_by(activities.c.id)).mappings()]
@@ -403,14 +420,7 @@ def list_activities(principal: Authenticated, db: Database):
 def add_activity(identifier: int, body: Activity, request: Request, principal: Authenticated, db: Database):
     principal.require("projects:manage")
     require_csrf(request, principal)
-    query = select(projects.c.id, literal(body.name)).where(
-        projects.c.id == identifier, projects.c.status.in_(("draft", "active")),
-    )
-    result = db.execute(insert(activities).from_select(["project_id", "name"], query))
-    if result.rowcount != 1:
-        raise HTTPException(409, "Project must be draft or active")
-    audit(db, "activity_created", principal.user.id, resource_type="project", resource_id=str(identifier))
-    commit(db)
+    raise HTTPException(409,'Activities originate in the planning sheet. Import/process planning to register activity codes; manual name-only creation is unavailable.')
 
 
 def custom_role(db, identifier):

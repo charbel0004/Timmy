@@ -108,13 +108,34 @@ def run_workflow(db, principal, config, *, workflow_id, project_id, request_key,
             damaged |= len(data) != file.size_bytes or sha256(data).hexdigest() != file.sha256
         except OSError:
             damaged = True
-    project_code = db.scalar(select(projects.c.project_code).where(projects.c.id == project_id))
+    planning_receipts=[]
+    preflight_issues=[]
+    if prepared_documents is None and not damaged and documents and workflow_id in {'weekly_cycle','process_activity'}:
+        from .column_mappings import propose_sheet, reuse_approved_formats, mapped_documents
+        from .planning_activities import register_planning
+        candidates=[propose_sheet(file,sheet,index) for file,record in documents for index,sheet in enumerate(record.sheets)]
+        accepted=reuse_approved_formats(db,principal.user.id,project_id,candidates)
+        if not accepted:
+            preflight_issues=['MAPPING_CONFIRMATION_REQUIRED']
+        else:
+            try:
+                with db.begin_nested():
+                    prepared_documents,planning_receipts=register_planning(db,principal,
+                        mapped_documents(documents,accepted),accepted,None)
+                mapping_ref='formats:'+sha256(json.dumps(sorted({s['verified_format_ref'] for s in accepted})).encode()).hexdigest()
+            except HTTPException as error:
+                preflight_issues=['PLANNING_REGISTRATION_BLOCKED: '+str(error.detail)]
     cutoffs = project_report_cutoffs(db, project_id)
+    from .planning_activities import registry
+    activity_registry = registry(db, [project_id])
+    project_codes = dict(db.execute(select(projects.c.id, projects.c.project_code).where(projects.c.id == project_id)).all())
     signature = dict(workflow=workflow_id, version=knowledge().model_dump(), project=project_id,
                      conversation=conversation_id, selected=sorted(str(x) for x in document_ids),
-                     documents=sorted((f.id, f.sha256) for f, _ in documents), cutoffs=[[list(key), value] for key, value in sorted(cutoffs.items())], mapping_ref=mapping_ref)
-    if workflow_id != "analyze_intake":
-        signature["project_code_scope"] = project_code
+                     documents=sorted((f.id, f.sha256) for f, _ in documents), cutoffs=[[list(key), value] for key, value in sorted(cutoffs.items())], mapping_ref=mapping_ref,
+                     activity_registry=[[list(key), value] for key,value in sorted(activity_registry.items())],
+                     preflight_issues=preflight_issues)
+    if workflow_id != 'analyze_intake':
+        signature['project_code_scope'] = project_codes.get(project_id)
     fingerprint = sha256(json.dumps(signature, sort_keys=True).encode()).hexdigest()
     previous = db.scalar(select(WorkflowRun).where(WorkflowRun.actor_id == principal.user.id,
                                                   WorkflowRun.request_key == request_key))
@@ -133,8 +154,8 @@ def run_workflow(db, principal, config, *, workflow_id, project_id, request_key,
             return existing
     snapshot = {'claims': [], 'activities': []} if structural_snapshot is None else structural_snapshot
     result_text = preview(prepared_documents if prepared_documents is not None else documents,
-                          snapshot=snapshot, report_cutoffs=cutoffs,
-                          project_codes={project_id: project_code}) if not damaged else None
+                          snapshot=snapshot, report_cutoffs=cutoffs, activity_registry=activity_registry,
+                          project_codes=project_codes) if not damaged else None
     activities = snapshot['activities']
     results = []
     # All plans are loaded from knowledge. Known steps have explicit implementations;
@@ -144,6 +165,8 @@ def run_workflow(db, principal, config, *, workflow_id, project_id, request_key,
             result = step_result(step, 'blocked', ['SOURCE_INTEGRITY_FAILED'])
         elif not documents:
             result = step_result(step, 'blocked', ['NO_VISIBLE_DOCUMENTS'])
+        elif preflight_issues:
+            result = step_result(step, 'blocked', preflight_issues)
         elif step == 'verify_intake':
             result = step_result(step, 'completed', files=len(documents),
                                  source_rows=sum(r.row_count for _, r in documents))
@@ -184,6 +207,7 @@ def run_workflow(db, principal, config, *, workflow_id, project_id, request_key,
                       fingerprint=fingerprint, workflow_id=workflow_id, knowledge_version=knowledge().version,
                       created_at=int(time()), status=status,
                       snapshot={'steps': results, 'source_ids': [f.id for f, _ in documents], 'mapping_ref': mapping_ref,
+                                'planning_activities': planning_receipts,
                                 'execution': {'mode': 'synchronous', 'completed_at': datetime.now(timezone.utc).isoformat()},
                                 'preview': result_text if workflow_id in {'process_activity', 'show_issues'} else None})
     db.add(run)
@@ -196,6 +220,9 @@ def run_workflow(db, principal, config, *, workflow_id, project_id, request_key,
 def render_run(run):
     label = next(w.label for w in knowledge().workflows if w.id == run.workflow_id)
     lines = [f'{label}: {run.status.replace("_", " ")} (run #{run.id}).']
+    if run.snapshot.get('planning_activities'):
+        codes=sorted({item['activity_code'] for item in run.snapshot['planning_activities']})
+        lines.append('Planning activities registered: '+', '.join(codes)+'.')
     for item in run.snapshot['steps']:
         lines.append(f"- {item['step'].replace('_', ' ')}: {item['status'].replace('_', ' ')}"
                      + (f" — {', '.join(item['issue_codes'])}" if item['issue_codes'] else ''))

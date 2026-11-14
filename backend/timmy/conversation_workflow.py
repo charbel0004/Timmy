@@ -15,7 +15,7 @@ from fastapi import HTTPException
 from sqlalchemy import select, func
 
 from .audit import audit
-from .column_mappings import SCHEMA_VERSION, REQUIRED, propose_sheet, mapping_errors, mapped_documents
+from .column_mappings import SCHEMA_VERSION, REQUIRED, OPTIONAL, propose_sheet, mapping_errors, mapped_documents, reuse_approved_formats
 from .documents import resolve_documents, project_report_cutoffs
 from .models import EvidenceReview, MappingProposal, StructuralValidation, WorkflowRun
 from .workflows import run_workflow, render_run, choose_workflow
@@ -66,9 +66,9 @@ def require_scope(db,principal,conversation,state):
 
 def proposal_view(proposal):
     return dict(id=proposal.id,version=proposal.version,fingerprint=proposal.fingerprint,
-                status=proposal.status,sheets=proposal.sheets,confirmed_at=proposal.confirmed_at,
+                status=proposal.status,confirmation_method='verified_format_reuse' if any(s.get('verified_format_ref') for s in proposal.sheets) else 'human_review',sheets=proposal.sheets,confirmed_at=proposal.confirmed_at,
                 confirmed_by=proposal.confirmed_by,
-                categories={kind:sorted(fields) for kind,fields in REQUIRED.items()})
+                categories={kind:sorted(fields | OPTIONAL.get(kind,set())) for kind,fields in REQUIRED.items()})
 
 
 def public_state(db,principal,conversation):
@@ -125,6 +125,9 @@ def status_text(state):
         lines.append('Confirm the exact mapping proposal, or specify the unresolved source columns. No background queue exists for this synchronous operation.')
     if state.get('blockers'):
         lines.append('Blockers: '+', '.join(state['blockers'])+'.')
+    if state.get('registered_activities'):
+        identities=sorted({f"{item['activity_code']} (activity #{item['activity_id']})" for item in state['registered_activities']})
+        lines.append('Planning activities: '+', '.join(identities)+'.')
     if state.get('result'):
         if (state.get('validation') or {}).get('review_id'):
             lines.append('### Structural check at time of run')
@@ -185,16 +188,35 @@ def start_mapping(db,principal,config,conversation,project_id,document_ids,force
     version=(db.scalar(select(func.max(MappingProposal.version)).where(MappingProposal.conversation_id==conversation.id)) or 0)+1
     proposal=MappingProposal(conversation_id=conversation.id,actor_id=principal.user.id,project_id=scope['project_id'],
                              fingerprint=scope['fingerprint'],version=version,sheets=sheets,created_at=int(time()),status='proposed')
+    # Approved column formats are reusable for this actor/project. Row values,
+    # identity verification and planning/report approval are never inherited.
+    reuse=reuse_approved_formats(db,principal.user.id,scope['project_id'],sheets) if not force_new else []
     db.add(proposal);db.flush()
     state=dict(scope=scope,stage='MAPPING_UNDER_REVIEW',mapping_id=proposal.id,pending='confirm_mapping',
                intake_run_id=state.get('intake_run_id') if state.get('scope',{}).get('fingerprint')==scope['fingerprint'] else None,
                validation=None,blockers=mapping_errors(sheets),milestones=['FILES_RECEIVED','FILES_IMPORTED','MAPPING_REQUIRED','MAPPING_UNDER_REVIEW'])
     save_state(conversation,state)
+    if len(reuse)==len(sheets) and reuse and not mapping_errors(reuse):
+        proposal.sheets=reuse;proposal.status='confirmed';proposal.confirmed_at=int(time());proposal.confirmed_by=principal.user.id
+        db.flush()
+        audit(db,'column_mapping_reused',principal.user.id,resource_type='mapping_proposal',resource_id=proposal.id,
+              outcome='verified_format_reuse')
+        return complete_validation(db,principal,config,conversation,proposal,documents,state)
     audit(db,'mapping_proposed',principal.user.id,resource_type='mapping_proposal',resource_id=proposal.id,outcome='human_review_required')
     return proposal_text(proposal,scope)
 
 
 def complete_validation(db,principal,config,conversation,proposal,documents,state):
+    from .planning_activities import register_planning
+    try:
+        with db.begin_nested():
+            prepared,registered=register_planning(db,principal,mapped_documents(documents,proposal.sheets),proposal.sheets,proposal.id)
+        state['registered_activities']=registered
+    except HTTPException as error:
+        state.update(stage='HUMAN_REVIEW_REQUIRED',pending=None,validation=None,blockers=[str(error.detail)])
+        state['result']='Planning activity registration is blocked. Correct the source evidence; no financial eligibility was created.'
+        save_state(conversation,state)
+        return status_text(state)
     cutoffs=project_report_cutoffs(db,proposal.project_id)
     evidence_fingerprint=sha256(json.dumps(["review-handoff-v1",proposal.fingerprint,proposal.sheets,
         [[list(k),v] for k,v in sorted(cutoffs.items())]],sort_keys=True).encode()).hexdigest()
@@ -215,7 +237,7 @@ def complete_validation(db,principal,config,conversation,proposal,documents,stat
             run=run_workflow(db,principal,config,workflow_id='process_activity',project_id=proposal.project_id,
                              request_key=f'mapping:{proposal.id}:{evidence_fingerprint}',conversation_id=conversation.id,
                              document_ids=state['scope']['source_ids'],
-                             prepared_documents=mapped_documents(documents,proposal.sheets), mapping_ref=proposal.id,
+                             prepared_documents=prepared, mapping_ref=proposal.id,
                              structural_snapshot=snapshot)
             if snapshot["activities"]:
                 review = StructuralValidation(project_id=proposal.project_id, actor_id=principal.user.id,

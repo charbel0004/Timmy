@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from timmy.auth import password_hasher
 from timmy.config import Settings, settings
 from timmy.main import create_app
-from timmy.models import AuditEvent, Role, User, project_memberships, projects
+from timmy.models import AuditEvent, Role, User, project_memberships, projects, activities
 
 ORIGIN = {"Origin": "http://localhost:5173"}
 PASSWORD = "local test password"
@@ -460,7 +460,8 @@ def test_project_document_discovery_and_explicit_scope(client, tmp_path, monkeyp
     from timmy.models import ExternalReportVersion
     with Session(client.app.state.engine) as db, db.begin():
         db.execute(update(projects).where(projects.c.id == 1).values(project_code="P"))
-        db.add(ExternalReportVersion(project_id=1, activity_code="A", source="test", report_id="R",
+        activity_id = db.execute(insert(activities).values(project_id=1, name="Synthetic registered source", activity_code="A", code_authority="source_supplied", planned_start="2026-06-01", planned_end="2026-07-31")).inserted_primary_key[0]
+        db.add(ExternalReportVersion(project_id=1, activity_id=activity_id, activity_code="A", source="test", report_id="R",
                                      version="1", submitted_at="2026-06-30T00:00:00Z", local_date="2026-06-30",
                                      cutoff="2026-06-30", validated_at="2026-06-30T12:00:00Z", evidence_ref="test event"))
     revalidated = client.post(validation, headers=headers)
@@ -502,6 +503,8 @@ def test_trusted_report_freezes_first_validated_version(client):
     def sync():
         return synchronize(engine, provider, project_id=1, activity_code="TEST", timezone="Asia/Beirut")
 
+    with Session(engine) as db, db.begin():
+        db.execute(insert(activities).values(project_id=1, name="Synthetic registered report target", activity_code="TEST", code_authority="source_supplied"))
     assert sync() == "2026-07-11"
     provider.versions.append(ReportEvent(report_id="R", version="v2", submitted_at="2026-07-14T12:00:00Z",
                                          validated_at="2026-07-15T12:00:00Z", evidence_ref="test-event-2"))

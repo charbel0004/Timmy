@@ -8,9 +8,11 @@ REQUIRED = {
     'directory': {'staff_id','status'},
     'projects': {'project_code','project_name'},
 }
+OPTIONAL = {'planning': {'activity_name'}}
 ALIASES = {
     'project_code': {'project code'}, 'project_name': {'project name'},
     'activity_code': {'activity code','رمز النشاط'},
+    'activity_name': {'activity name','اسم النشاط'},
     'staff_id': {'staff id','volunteer id','staff identifier','رقم المتطوع','معرف الموظف'},
     'role': {'role','الدور'}, 'session_number': {'session number','session','رقم الجلسة'},
     'work_date': {'work date','activity date','date','تاريخ العمل','التاريخ'},
@@ -48,7 +50,7 @@ def propose_sheet(file, sheet, index):
     else:
         kind = max(scores, key=scores.get) if fields else 'unsupported'
     if kind != 'unsupported':
-        fields = {k:v for k,v in fields.items() if k in REQUIRED[kind]}
+        fields = {k:v for k,v in fields.items() if k in REQUIRED[kind] | OPTIONAL.get(kind,set())}
     return {'file_id':file.id, 'filename':file.original_filename, 'sheet_index':index,
             'sheet_name':sheet['name'], 'kind':kind, 'header_row':rows[0]['row'] if rows else None,
             'headers':headers, 'columns':fields, 'conflicts':conflicts,
@@ -68,7 +70,7 @@ def mapping_errors(sheets):
             errors.append(f"{label}: missing required field(s): {', '.join(sorted(missing))}.")
         if sheet.get('conflicts'):
             errors.append(f"{label}: ambiguous duplicate field(s): {', '.join(sheet['conflicts'])}.")
-        if set(sheet['columns'])-required:
+        if set(sheet['columns'])-required-OPTIONAL.get(sheet['kind'],set()):
             errors.append(f'{label}: unexpected canonical fields for this document category.')
         columns=list(sheet['columns'].values())
         if (len(columns)!=len(set(columns)) or any(type(c) is not int or c<0 or c>=len(sheet['headers']) for c in columns)):
@@ -93,3 +95,28 @@ def mapped_documents(documents, sheets):
             normalized.append({'name':sheet['name'],'rows':rows})
         result.append((file,SimpleNamespace(sheets=normalized,row_count=record.row_count)))
     return result
+
+
+def reuse_approved_formats(db, actor_id, project_id, sheets):
+    """Reuse exact reviewed headers in this actor/project; ambiguity requires review."""
+    import copy
+    import json
+    from sqlalchemy import select
+    from .models import MappingProposal
+    confirmed=db.scalars(select(MappingProposal).where(MappingProposal.actor_id==actor_id,
+        MappingProposal.project_id==project_id,MappingProposal.status=='confirmed')
+        .order_by(MappingProposal.created_at.desc()).limit(100)).all()
+    reused=[]
+    for sheet in sheets:
+        matches={}
+        for previous in confirmed:
+            for accepted in previous.sheets:
+                if accepted['headers']==sheet['headers']:
+                    signature=json.dumps([accepted['kind'],accepted['columns']],sort_keys=True)
+                    matches.setdefault(signature,(previous.id,accepted))
+        if len(matches)!=1:return []
+        origin,accepted=next(iter(matches.values()))
+        candidate=copy.deepcopy(sheet)
+        candidate.update(kind=accepted['kind'],columns=accepted['columns'],conflicts=[],verified_format_ref=origin)
+        reused.append(candidate)
+    return reused if not mapping_errors(reused) else []

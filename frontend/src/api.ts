@@ -44,6 +44,7 @@ export interface ConversationWorkflow {
   scope?: { project_id: number; source_ids: string[]; source_rows: number };
   scope_fresh?: boolean;
   mapping?: { id: string; version: number; fingerprint: string; status: string; effective_status?: string;
+    confirmation_method?: string;
     categories: Record<string, string[]>;
     sheets: { file_id: string; filename: string; sheet_index: number; kind: string;
       headers: string[]; columns: Record<string, number> }[] } | null;
