@@ -28,6 +28,9 @@ cp -a "$repo/backend" "$scratch/source/backend"
 # Bring only reviewed script/test fixtures, never root .env or live files.
 mkdir -p "$scratch/source/ops"
 cp -a "$repo/ops/deploy" "$scratch/source/ops/deploy"
+# Deployment policy tests also verify the committed CI/CD workflow.
+mkdir -p "$scratch/source/.github"
+cp -a "$repo/.github/workflows" "$scratch/source/.github/workflows"
 [[ ! -e "$scratch/source/.env" ]] || {
   echo 'Isolated source unexpectedly contains a .env file' >&2; exit 1;
 }

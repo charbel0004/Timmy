@@ -23,6 +23,7 @@ def test_isolated_backend_checks_ignore_hostile_checkout_env(tmp_path):
     fake_repo.mkdir()
     shutil.copytree(ROOT / "backend", fake_repo / "backend")
     shutil.copytree(ROOT / "ops" / "deploy", fake_repo / "ops" / "deploy")
+    shutil.copytree(ROOT / ".github" / "workflows", fake_repo / ".github" / "workflows")
     (fake_repo / ".env").write_text(
         "TIMMY_FRONTEND_ORIGIN=https://prod.example.invalid\n"
         "TIMMY_COOKIE_SECURE=true\n"
