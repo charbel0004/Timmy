@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
-# Forced command in timmy-deploy's authorized_keys; no interactive shell.
+# Forced command: GitHub Actions may request only a pinned-SHA deployment.
 set -euo pipefail
 if [[ "${SSH_ORIGINAL_COMMAND:-}" =~ ^deploy\ ([0-9a-f]{40})$ ]]; then
-  sha="${BASH_REMATCH[1]}"
-  exec /usr/local/bin/timmy-stage-release "$sha"
+  exec sudo -n /usr/local/sbin/timmy-deploy "${BASH_REMATCH[1]}"
 fi
-echo 'Rejected: only "deploy <40-character SHA>" is permitted' >&2
+echo 'Only deploy <40-character Git SHA> is permitted' >&2
 exit 2
