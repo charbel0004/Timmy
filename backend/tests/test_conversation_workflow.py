@@ -92,6 +92,28 @@ def test_original_confirmation_sequence_advances_and_status_is_real(conversation
             assert db.execute(text(f'SELECT count(*) FROM {table}')).scalar()==0
 
 
+def test_repeated_confirmation_preserves_pending_authority_review(conversation):
+    c,h,conv,send,state,*_ = conversation
+    send('Process'); send('Confirmed')
+    before = state()
+    assert before['stage'] == 'HUMAN_REVIEW_REQUIRED'
+    send('Confirmed')
+    after = state()
+    assert after['stage'] == before['stage']
+    assert after['validation'] == before['validation']
+    assert after['blockers'] == before['blockers']
+    mapping = after['mapping']
+    response = c.post(f"/api/chat/conversations/{conv}/mappings/{mapping['id']}/confirm", headers=h,
+                      json={'version': mapping['version'], 'fingerprint': mapping['fingerprint']})
+    assert response.status_code == 200, response.text
+    assert response.json()['workflow']['stage'] == before['stage']
+    assert response.json()['workflow']['validation'] == before['validation']
+    assert state()['stage'] == before['stage']
+    with Session(c.app.state.engine) as db:
+        assert db.scalar(select(func.count()).select_from(WorkflowRun).where(
+            WorkflowRun.workflow_id == 'process_activity')) == 1
+
+
 def test_no_job_status_and_orphan_confirmation_never_use_model(conversation):
     _,_,_,send,state,*_=conversation
     assert 'No processing run' in send('Is it done?')

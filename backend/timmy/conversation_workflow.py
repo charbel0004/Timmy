@@ -297,7 +297,8 @@ def confirm_mapping(db,principal,config,conversation,proposal_id,version,fingerp
         db.flush()
         audit(db,'column_mapping_confirmed',principal.user.id,resource_type='mapping_proposal',resource_id=proposal.id,
               outcome='confirmed',trigger='human_confirmation')
-    state['stage']='MAPPING_CONFIRMED';save_state(conversation,state)
+    # complete_validation preserves the final review state on an exact replay.
+    # Do not overwrite it merely because the same mapping is confirmed again.
     return complete_validation(db,principal,config,conversation,proposal,documents,state)
 
 
