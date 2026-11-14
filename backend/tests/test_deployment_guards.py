@@ -59,6 +59,9 @@ def test_live_deploy_migration_is_narrow_and_restores_before_restart():
     assert 'systemctl start timmy-api' in script
     assert script.index('sqlite3 timmy.db ".restore') < script.index('if [[ "$recovery_ok" == true ]]; then')
     assert 'bash "$isolated_checks"' in script
+    assert 'systemctl daemon-reload' in script
+    deploy_yaml = (ROOT / ".github" / "workflows" / "deploy.yml").read_text()
+    assert "vars.TIMMY_DEPLOY_V2_READY == 'true'" in deploy_yaml
 
 
 def test_server_cannot_expose_live_dotenv_to_test_runner():

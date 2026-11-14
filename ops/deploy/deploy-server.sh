@@ -85,6 +85,7 @@ cleanup() {
       rsync -a --delete "$temp/previous-web/" "$web/"
     fi
     if [[ "$recovery_ok" == true ]]; then
+      systemctl daemon-reload
       systemctl start timmy-api
       recovered=false
       for i in {1..25}; do
@@ -160,6 +161,7 @@ VITE_API_URL=/api npm run build --prefix frontend
 
 web_changed=true
 rsync -a --delete frontend/dist/ "$web/"
+systemctl daemon-reload
 systemctl start timmy-api
 
 healthy=false
