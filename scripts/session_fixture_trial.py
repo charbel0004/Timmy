@@ -7,7 +7,6 @@ import os
 import sys
 from collections import defaultdict
 from datetime import date
-from decimal import Decimal
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -16,7 +15,7 @@ from alembic.config import Config
 
 from timmy.config import settings
 from timmy.database import make_engine
-from timmy.session_pool import export_blockers, pool_credits
+from timmy.session_pool import cross_project_proposals, pool_credits
 from timmy.session_rules import Claim, coverage
 
 
@@ -158,29 +157,26 @@ def trial(directory, url):
 
     grouped = pool_credits(engine)
     assert pool_credits(engine) == 0
+    proposals = cross_project_proposals(engine)
+    assert proposals == cross_project_proposals(engine)
+    assert {proposal["credits"][0]["staff"] for proposal in proposals
+            if proposal["credits"][0]["staff"] in {"TEST-010", "TEST-011", "TEST-012"}} == {"TEST-010", "TEST-011"}
     with engine.connect() as db:
         for row in expected_pool:
             identifier = row["staff_id"]
-            groups = db.exec_driver_sql("SELECT id, amount FROM session_trial_groups WHERE staff=?", (identifier,)).all()
-            assert len(groups) == int(row["groups"])
-            assert sum(Decimal(group.amount) for group in groups) == Decimal(row["amount_usd"])
+            assert not db.exec_driver_sql("SELECT 1 FROM session_trial_groups WHERE staff=?", (identifier,)).first()
+            # The source expectations use v1.0. Under v1.1, proposed credits remain unconsumed.
             for policy_count in row["remainder_by_policy"].split("|"):
-                policy, count = policy_count.split(":")
+                policy, remainder = policy_count.split(":")
+                expected = int(remainder) + 3 * int(row["groups"])
                 actual = db.exec_driver_sql("""
                     SELECT count(*) FROM session_trial_credits c LEFT JOIN session_trial_group_credits g
                     ON c.id=g.credit_id WHERE c.staff=? AND c.policy=? AND g.credit_id IS NULL
                 """, (identifier, policy)).scalar_one()
-                assert actual == int(count)
-            for group in groups:
-                origins = db.exec_driver_sql("""
-                    SELECT DISTINCT c.project FROM session_trial_credits c
-                    JOIN session_trial_group_credits g ON g.credit_id=c.id WHERE g.group_id=?
-                """, (group.id,)).fetchall()
-                assert len(origins) > 1 and row["export_state"] == "ALLOCATION_REVIEW_REQUIRED"
-                assert export_blockers(engine, group.id) == ("ALLOCATION_REVIEW_REQUIRED", "BATCH_APPROVAL_REQUIRED")
+                assert actual == expected
         assert db.exec_driver_sql("PRAGMA foreign_key_check").all() == []
     return {"activities": activity_states, "invalid_cases": len(invalid), "staged_rows_blocked": len(staged),
-            "fixture_mismatches": mismatches, "groups_created": grouped, "retry_groups_created": 0, "export": "disabled for synthetic trial"}
+            "fixture_mismatches": mismatches, "groups_created": grouped, "cross_project_proposals": len(proposals), "retry_groups_created": 0, "export": "disabled for synthetic trial"}
 
 
 if __name__ == "__main__":

@@ -1,0 +1,58 @@
+{
+  "schema_version": "1.0",
+  "locked_source_hierarchy": [
+    "official_challenge",
+    "NK_approved_spec_v1.1",
+    "NK_session_policy_v1.0",
+    "NK_cross_project_addendum_v1.1",
+    "backend_active_human_approved_config",
+    "ai_instruction_pack"
+  ],
+  "sources": {
+    "planning": {
+      "owner": "approved_external_planning_spreadsheet",
+      "status": "source_column_schema_unconfirmed",
+      "code_creation": "external_only",
+      "input_formats": "only_CNs_approved_configured_sheet_types"
+    },
+    "staff": {
+      "owner": "verified_source_staff_registry",
+      "status": "exact_authoritative_file_schema_unconfirmed",
+      "identity_match": "stable_verified_id_or_human_verified_alias"
+    },
+    "timesheets": {
+      "owner": "submitted_staff_evidence",
+      "formats": [
+        ".csv",
+        ".xlsx"
+      ],
+      "status": "raw_evidence_not_self_approval"
+    },
+    "activity_report": {
+      "owner": "external_report_registry",
+      "status": "authoritative_adapter_provenance_pending",
+      "one_per_session_activity": true
+    },
+    "payment_return": {
+      "owner": "external_payment_processor_report",
+      "status": "exact_schema_and_status_mapping_pending"
+    }
+  },
+  "blocking_open_fields": [
+    "HOURS_RATE_PER_ROLE",
+    "HOURS_OVERTIME_THRESHOLD_AND_MULTIPLIER",
+    "HOURS_OVERNIGHT_PREMIUM_AND_STACKING",
+    "HOURS_BREAKS_ROUNDING_CAPS",
+    "HOURS_SOURCE_TIME_REPRESENTATION",
+    "PLANNING_REAL_HEADER_MAP",
+    "STAFF_VERIFIED_SOURCE_HEADER_MAP",
+    "TIMESHEET_EXPLICIT_SESSION_PAIR_FIELD_MAP",
+    "REPORT_AUTHORITY_VERSION_ID_AND_PROJECT_TIMEZONE",
+    "PAYMENT_EXPORT_APPROVED_SCHEMA",
+    "PAYMENT_RETURN_APPROVED_SCHEMA",
+    "PAYMENT_DESTINATION_VERIFICATION",
+    "FIN_VERSION_COMPATIBILITY_FOR_SESSION_CREDITS",
+    "CROSS_PROJECT_AUTHORIZED_BUDGET_SPLIT",
+    "REVIEWER_CAPABILITIES_AUTHORIZATION_ASSIGNMENT"
+  ]
+}

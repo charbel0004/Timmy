@@ -8,6 +8,8 @@ export interface ChatMessage {
   timestamp: string;
   attachments?: string[];
   tables?: ChatTable[];
+  activity?: string[];
+  requestId?: string;
 }
 export interface ChatRequest {
   conversationId: string;

@@ -4,7 +4,7 @@ import type { ChangeEvent, FormEvent } from "react";
 import { ArrowUp, CalendarDays, Copy, FileSpreadsheet, ListFilter, Paperclip, PanelRight, Plus, Sparkles, Wallet, X } from "lucide-react";
 import Markdown from "react-markdown";
 import { api, documentDownload, errorMessage } from "./api";
-import type { DocumentRecord, Project } from "./api";
+import type { DocumentRecord, Project, ConversationWorkflow } from "./api";
 import type { ChatMessage, Conversation } from "./chat";
 import { Badge } from "./design";
 
@@ -47,6 +47,16 @@ export function ConversationHistory({ conversations, activeId, onSelect, onNew, 
   </section>;
 }
 
+function ActivitySteps({ steps, requestId, live = false }: {
+  steps: string[]; requestId?: string; live?: boolean;
+}) {
+  return <details open={live || undefined} className="assistant-activity">
+    <summary>Assistant activity</summary>
+    <ol>{steps.map((step, index) => <li key={index}>{step}</li>)}</ol>
+    {requestId && <small>Request ID: <code>{requestId}</code></small>}
+  </details>;
+}
+
 function Message({ message, csrf }: { message: ChatMessage; csrf?: string }) {
   const [copyStatus, setCopyStatus] = useState("");
   return <article className={`chat-message chat-message--${message.role}`}>
@@ -58,6 +68,7 @@ function Message({ message, csrf }: { message: ChatMessage; csrf?: string }) {
     </div>
     {!!message.attachments?.length && <ul className="attachment-list">{message.attachments.map((name, i) =>
       <li key={i} dir="auto">{name}</li>)}</ul>}
+    {!!message.activity?.length && <ActivitySteps steps={message.activity} requestId={message.requestId} />}
     {message.tables?.map((table, index) => <details key={index}>
       <summary>{table.title}</summary>
       <div className="chat-table" tabIndex={0} role="region" aria-label={table.title}>
@@ -77,6 +88,58 @@ function Message({ message, csrf }: { message: ChatMessage; csrf?: string }) {
   </article>;
 }
 
+function MappingReview({ state, conversationId, csrf, onResult }: {
+  state: ConversationWorkflow; conversationId: string; csrf: string;
+  onResult: (state: ConversationWorkflow, messages: ChatMessage[]) => void;
+}) {
+  const proposal = state.mapping!;
+  const [selections, setSelections] = useState(() => proposal.sheets.map((sheet) => ({
+    file_id: sheet.file_id, sheet_index: sheet.sheet_index, kind: sheet.kind, columns: { ...sheet.columns },
+  })));
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  return <details open className="glass-panel">
+    <summary>Review column mappings · version {proposal.version}</summary>
+    <p>Confirm the source columns below. This confirms column interpretation, not staff identity, report approval, or payment authority.</p>
+    <form onSubmit={async (event) => {
+      event.preventDefault(); setBusy(true); setError("");
+      try {
+        const result = await api.confirmMapping(conversationId, proposal.id, proposal.version, proposal.fingerprint, selections, csrf);
+        const history = await api.conversation(conversationId);
+        onResult(result.workflow, history.messages);
+      } catch (error) { setError(errorMessage(error)); }
+      finally { setBusy(false); }
+    }}>
+      {proposal.sheets.map((sheet, i) => <fieldset key={`${sheet.file_id}:${sheet.sheet_index}`} disabled={busy}>
+        <legend>{sheet.filename} · sheet {sheet.sheet_index + 1}</legend>
+        <label>Document category<select value={selections[i].kind} onChange={(event) => {
+          const kind = event.target.value;
+          setSelections((current) => current.map((entry, j) => j === i ? { ...entry, kind, columns: {} } : entry));
+        }}>
+          <option value="unsupported">Select category</option>
+          {Object.keys(proposal.categories).map((kind) => <option key={kind}>{kind}</option>)}
+        </select></label>
+        {(proposal.categories[selections[i].kind] ?? []).map((field) => <label key={field}>{field}
+          <select value={selections[i].columns[field] ?? -1} onChange={(event) => {
+            const column = Number(event.target.value);
+            setSelections((current) => current.map((entry, j) => {
+              if (i !== j) return entry;
+              const columns = { ...entry.columns };
+              if (column < 0) delete columns[field]; else columns[field] = column;
+              return { ...entry, columns };
+            }));
+          }}>
+            <option value={-1}>Select source column</option>
+            {sheet.headers.map((header, column) => <option key={column} value={column}>{column + 1}: {header || "Empty header"}</option>)}
+          </select>
+        </label>)}
+      </fieldset>)}
+      {error && <p role="alert">{error}</p>}
+      <button type="submit" disabled={busy || state.scope_fresh === false}>{busy ? "Checking confirmation…" : "Confirm mappings and run checks"}</button>
+    </form>
+  </details>;
+}
+
 export function Assistant({ conversation, append, canReadProjects, csrfToken, onBusy }: {
   conversation?: Conversation; append: (conversationId: string, ...messages: ChatMessage[]) => void;
   canReadProjects: boolean; csrfToken: string; onBusy: (busy: boolean) => void;
@@ -84,9 +147,12 @@ export function Assistant({ conversation, append, canReadProjects, csrfToken, on
   const pending = useRef<{ id?: string; message: string; requestId: string }>(undefined);
   const [draft, setDraft] = useState("");
   const [documents, setDocuments] = useState<DocumentRecord[]>([]);
+  const [workflow, setWorkflow] = useState<ConversationWorkflow>();
   const [files, setFiles] = useState<File[]>([]);
   const [open, setOpen] = useState(false);
   const [activity, setActivity] = useState<"connecting" | "processing">();
+  const [steps, setSteps] = useState<string[]>([]);
+  const [failedRequest, setFailedRequest] = useState<string>();
   const busy = activity !== undefined;
   const [submitted, setSubmitted] = useState<ChatMessage>();
   const textarea = useRef<HTMLTextAreaElement>(null);
@@ -126,12 +192,16 @@ export function Assistant({ conversation, append, canReadProjects, csrfToken, on
   useEffect(() => {
     if (!conversation?.id) return;
     let active = true;
+    api.workflowState(conversation.id).then(
+      (state) => { if (active) { setWorkflow(state); if (state.scope) setProjectId(state.scope.project_id); } },
+      (error) => { if (active) { setWorkflow(undefined); setError(errorMessage(error)); } },
+    );
     api.documents(conversation.id).then(
       (records) => { if (active) setDocuments(records); },
       (error) => { if (active) setError(errorMessage(error)); },
     );
     return () => { active = false; };
-  }, [conversation?.id]);
+  }, [conversation?.id, conversation?.messages.length]);
 
   function selectFiles(event: ChangeEvent<HTMLInputElement>) {
     const selected = Array.from(event.currentTarget.files ?? []);
@@ -158,14 +228,31 @@ export function Assistant({ conversation, append, canReadProjects, csrfToken, on
       id: attempt.requestId, role: "user", text: message, timestamp: new Date().toISOString(),
     };
     setSubmitted(optimistic);
+    setFailedRequest(undefined);
+    setSteps([attempt.id ? "Preparing your request" : "Opening a conversation"]);
     setDraft("");
     setActivity(attempt.id ? "processing" : "connecting");
     onBusy(true);
     setError("");
+    let timer: ReturnType<typeof setInterval> | undefined;
+    let polling = false;
+    let inFlight = false;
+    let sent = false;
+    async function refreshSteps() {
+      if (!attempt.id || inFlight) return;
+      inFlight = true;
+      try {
+        const update = await api.assistantActivity(attempt.id, attempt.requestId);
+        if (polling && update.steps.length) setSteps(update.steps);
+      } catch {
+        // Activity is supplemental; the message request reports its own failure.
+      } finally { inFlight = false; }
+    }
     try {
       const id = attempt.id ?? (await api.createConversation(csrfToken)).id;
       attempt.id = id;
       if (projectId !== undefined) {
+        if (files.length) setSteps(["Uploading attachments"]);
         for (const file of files) {
           const record = await api.uploadDocument(projectId, id, file, csrfToken);
           setDocuments((current) => [...current, record]);
@@ -174,13 +261,29 @@ export function Assistant({ conversation, append, canReadProjects, csrfToken, on
         }
       }
       setActivity("processing");
+      setSteps(["Sending your message"]);
+      sent = true;
+      polling = true;
+      timer = setInterval(() => void refreshSteps(), 600);
       const reply = await api.sendMessage(id, message, csrfToken, attempt.requestId, projectId);
+      try {
+        reply.message.activity = (await api.assistantActivity(id, attempt.requestId)).steps;
+      } catch { /* The reply remains usable if the activity request fails. */ }
       append(id, { ...optimistic, timestamp: reply.message.timestamp }, reply.message);
       pending.current = undefined;
     } catch (error) {
       setError(errorMessage(error));
       setDraft(message);
+      setFailedRequest(attempt.requestId);
+      if (sent && attempt.id) {
+        try {
+          const update = await api.assistantActivity(attempt.id, attempt.requestId);
+          if (update.steps.length) setSteps(update.steps);
+        } catch { /* Retain the last known step. */ }
+      }
     } finally {
+      polling = false;
+      clearInterval(timer);
       setSubmitted(undefined);
       setActivity(undefined);
       sending.current = false;
@@ -206,9 +309,15 @@ export function Assistant({ conversation, append, canReadProjects, csrfToken, on
             }}><Icon size={18} aria-hidden="true" />{label}</button>)}</div>
         </div> : messages.map((message) => <Message key={message.id} message={message} csrf={csrfToken} />)}
         {submitted && <Message message={submitted} />}
-        {activity && <p className="assistant-activity" role="status"><Sparkles size={16} aria-hidden="true" />
-          {activity === "connecting" ? "Connecting…" : "Processing your request…"}</p>}
+        {(activity || failedRequest) && <ActivitySteps steps={steps} requestId={failedRequest} live />}
       </div>
+      {workflow?.mapping?.status === "proposed" && conversation?.id && <MappingReview key={workflow.mapping.id}
+        state={workflow} conversationId={conversation.id} csrf={csrfToken}
+        onResult={(state, persistedMessages) => {
+          setWorkflow(state);
+          const knownIds = new Set(messages.map((message) => message.id));
+          append(conversation.id, ...persistedMessages.filter((message) => !knownIds.has(message.id)));
+        }} />}
       <form className="chat-composer" onSubmit={submit}>
         <p className="muted"><Badge tone="cyan">Local Ollama</Badge> Select a project in Context before sending CSV or XLSX files.</p>
         <label htmlFor="chat-input" className="sr-only">Message Agent Timmy</label>
@@ -219,9 +328,20 @@ export function Assistant({ conversation, append, canReadProjects, csrfToken, on
               event.currentTarget.form?.requestSubmit();
             }
           }} />
+        {workflow?.scope && <div role="status" aria-label="Persisted workflow state">
+          <p>Workflow: {workflow.stage} · {workflow.scope.source_ids.length} files · {workflow.scope.source_rows} source rows in scope.</p>
+          {workflow.validation && <p>Structural validation: {workflow.validation.status}
+            {workflow.validation.run_id && ` · Run #${workflow.validation.run_id}`}
+            {workflow.validation.error_code && ` · ${workflow.validation.error_code}`}</p>}
+          {workflow.scope_fresh === false && <p>The source scope changed. Request Process to review a fresh mapping proposal.</p>}
+          {workflow.mapping?.status === "confirmed" && <button type="button" className="secondary" disabled={busy}
+            onClick={() => { setDraft("Revise column mappings"); textarea.current?.focus(); }}>Revise column mappings</button>}
+        </div>}
         {documents.length > 0 && <ul className="attachment-list">{documents.map((document) =>
           <li key={document.id}><a href={documentDownload(document.id)} dir="auto">{document.filename}</a>
-            <small>{document.rows} rows · Mapping required</small></li>)}</ul>}
+            <small>{document.rows} rows · {workflow?.mapping?.status === "confirmed" && workflow.scope_fresh !== false
+              && workflow.mapping.sheets.some((sheet) => sheet.file_id === document.id)
+              ? "Column mapping confirmed" : "Mapping review required"}</small></li>)}</ul>}
         {files.length > 0 && <ul className="attachment-list">{files.map((file, i) =>
           <li key={i}><span dir="auto">{file.name}</span>
             <button type="button" className="secondary" aria-label={`Remove ${file.name}`}

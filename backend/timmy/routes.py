@@ -27,7 +27,7 @@ def session_view(principal: Principal, demo_mode: bool) -> SessionView:
 @router.get("/health")
 def health(db: Database):
     try:
-        db.execute(text("SELECT version_num FROM alembic_version WHERE version_num = '0011'")).scalar_one()
+        db.execute(text("SELECT version_num FROM alembic_version WHERE version_num = '0014'")).scalar_one()
     except SQLAlchemyError:
         raise HTTPException(503, "Database unavailable or migrations pending") from None
     return {"status": "ok"}

@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Safe adapter result; backend-enforced",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "capability",
+    "correlation_id",
+    "status",
+    "evidence_refs",
+    "redacted_summary",
+    "error_code",
+    "retry_safe"
+  ],
+  "properties": {
+    "capability": {
+      "type": "string",
+      "maxLength": 100
+    },
+    "correlation_id": {
+      "type": "string",
+      "maxLength": 128
+    },
+    "status": {
+      "enum": [
+        "succeeded",
+        "blocked",
+        "failed",
+        "partial"
+      ]
+    },
+    "evidence_refs": {
+      "type": "array",
+      "maxItems": 25,
+      "items": {
+        "type": "string",
+        "maxLength": 128
+      }
+    },
+    "redacted_summary": {
+      "type": "string",
+      "maxLength": 2000
+    },
+    "error_code": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 80
+    },
+    "retry_safe": {
+      "type": "boolean"
+    }
+  }
+}

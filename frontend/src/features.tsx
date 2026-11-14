@@ -220,7 +220,7 @@ export function SettingsPanel() {
 }
 
 
-type Validation = { id: number; activities: Array<{
+type Validation = { id: number; project_id: number; activities: Array<{
   project_code: string; activity_code: string; structure: string; session_pairs: number; role_slots: number;
   planning: string; staff: string; report: string; eligibility: string; approval: string; settlement: string;
   issues: Record<string, number>; review_tasks: string[];
@@ -250,6 +250,11 @@ function EvidenceHistory({ validation, item, session, project }: {
   return <details>
     <summary>Evidence review</summary>
     <p className="muted">Reviews apply to this snapshot. Report authority and payment eligibility are checked separately.</p>
+    {(["planning", "staff"] as const).map((kind) => {
+      const latest = history.find((row) => row.kind === kind && row.project_code === item.project_code
+        && row.activity_code === item.activity_code);
+      return <p key={kind}>{kind === "planning" ? "Planning evidence" : "Staff evidence"}: {latest?.decision ?? "awaiting review"}</p>;
+    })}
     <ul>{history.filter((row) => row.project_code === item.project_code && row.activity_code === item.activity_code).map((row) =>
       <li key={row.id}>{row.kind}: {row.decision} · {row.evidence_ref} · Reviewer #{row.actor_id}</li>)}</ul>
     {error && <p role="alert">{error}</p>}
@@ -275,7 +280,7 @@ function EvidenceHistory({ validation, item, session, project }: {
   </details>;
 }
 
-export function StructuralReview({ session }: { session: Session }) {
+export function StructuralReview({ session, validationId }: { session: Session; validationId?: string }) {
   const [project, setProject] = useState("");
   const [saved, setSaved] = useState<Validation | null>(null);
   const [error, setError] = useState("");
@@ -285,12 +290,12 @@ export function StructuralReview({ session }: { session: Session }) {
     let current = true;
     setSaved(null);
     setError("");
-    if (project) request<Validation | null>(path).then(
+    if (validationId || project) request<Validation | null>(validationId ? `/documents/validation/${validationId}` : path).then(
       (value) => { if (current) setSaved(value); },
       (error) => { if (current) setError(errorMessage(error)); },
     );
     return () => { current = false; };
-  }, [project, path]);
+  }, [project, path, validationId]);
 
   async function validate() {
     setBusy(true);
@@ -305,13 +310,13 @@ export function StructuralReview({ session }: { session: Session }) {
 
   return <section className="glass-panel admin-form">
     <h2>Structural validation &amp; review</h2>
-    <ApiPanel load={api.projects} render={(projects) => <label>Active project
+    {validationId ? <a href="#imports">Browse project validations</a> : <ApiPanel load={api.projects} render={(projects) => <label>Active project
       <select disabled={busy} value={project} onChange={(event) => setProject(event.target.value)}>
         <option value="">Select project</option>
         {projects.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
       </select>
-    </label>} />
-    {session.permissions.includes("projects:manage") && <div>
+    </label>} />}
+    {!validationId && session.permissions.includes("projects:manage") && <div>
       <button disabled={!project || busy} onClick={() => void validate()}>{busy ? "Checking files…" : "Run and save structural checks"}</button>
     </div>}
     {error && <p role="alert">{error}</p>}
@@ -322,7 +327,7 @@ export function StructuralReview({ session }: { session: Session }) {
         <p>Planning: {item.planning} · Identity: {item.staff} · External report: {item.report}</p>
         <p>Eligibility: {item.eligibility} · Approval: {item.approval} · Settlement: {item.settlement}</p>
         {item.report_evidence && <p>Frozen cutoff: {item.report_evidence.cutoff} · Validated version: {item.report_evidence.version}</p>}
-        <EvidenceHistory key={saved.id} validation={saved.id} item={item} session={session} project={project} />
+        <EvidenceHistory key={saved.id} validation={saved.id} item={item} session={session} project={String(saved.project_id)} />
         <ul>{[...Object.keys(item.issues), ...item.review_tasks].map((code) => <li key={code}>{code}</li>)}</ul>
       </article>)}</>}
   </section>;

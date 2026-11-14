@@ -116,6 +116,12 @@ payment_policies = Table(
     "payment_policies", metadata, identity(), reference("project_id", "projects.id"),
     Column("version", Integer, nullable=False), CheckConstraint("version > 0"),
     UniqueConstraint("project_id", "version"),
+    Column("configuration", JSON),
+    Column("status", String(16), nullable=False, server_default="draft"),
+    Column("created_by", ForeignKey("users.id")),
+    Column("created_at", Integer),
+    Column("activated_by", ForeignKey("users.id")),
+    Column("activated_at", Integer),
 )
 payment_batches = Table(
     "payment_batches", metadata, identity(), reference("policy_id", "payment_policies.id"),
@@ -131,6 +137,23 @@ class Conversation(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     title: Mapped[str | None] = mapped_column(String(120))
     owner_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    workflow_state: Mapped[dict | None] = mapped_column(JSON)
+
+
+class MappingProposal(Base):
+    __tablename__ = "mapping_proposals"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    conversation_id: Mapped[str] = mapped_column(ForeignKey("conversations.id", ondelete="CASCADE"), index=True)
+    actor_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"))
+    fingerprint: Mapped[str] = mapped_column(String(64))
+    version: Mapped[int]
+    sheets: Mapped[list] = mapped_column(JSON)
+    status: Mapped[str] = mapped_column(String(20), default="proposed")
+    created_at: Mapped[int]
+    confirmed_at: Mapped[int | None]
+    confirmed_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
 
 
 class ChatTurn(Base):
@@ -145,6 +168,23 @@ class ChatTurn(Base):
     prompt: Mapped[str] = mapped_column(Text)
     reply: Mapped[str] = mapped_column(Text)
     created_at: Mapped[int]
+    context: Mapped[dict | None] = mapped_column(JSON)
+
+
+class WorkflowRun(Base):
+    __tablename__ = "workflow_runs"
+    __table_args__ = (UniqueConstraint("actor_id", "request_key"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    actor_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"), index=True)
+    request_key: Mapped[str] = mapped_column(String(160))
+    fingerprint: Mapped[str] = mapped_column(String(64))
+    workflow_id: Mapped[str] = mapped_column(String(80))
+    knowledge_version: Mapped[str] = mapped_column(String(40))
+    created_at: Mapped[int]
+    status: Mapped[str] = mapped_column(String(30))
+    snapshot: Mapped[dict] = mapped_column(JSON)
 
 
 user_roles = Table(

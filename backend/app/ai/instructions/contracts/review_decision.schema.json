@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Backend/human-only review decision (must not be signed by AI)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "decision_id",
+    "decision_kind",
+    "actor_id",
+    "permission_ref",
+    "subject_refs",
+    "evidence_refs",
+    "decision_at_utc",
+    "request_digest",
+    "audit_event_id"
+  ],
+  "properties": {
+    "decision_id": {
+      "type": "string"
+    },
+    "decision_kind": {
+      "enum": [
+        "confirm_identity_alias",
+        "confirm_header_mapping",
+        "confirm_role_alias",
+        "invalidate_claim",
+        "authorize_planning_exception",
+        "approve_cross_project_group_once",
+        "decline_cross_project_group",
+        "approve_budget_allocation",
+        "approve_exact_payment_batch",
+        "reject_review"
+      ]
+    },
+    "actor_id": {
+      "type": "string"
+    },
+    "permission_ref": {
+      "type": "string"
+    },
+    "subject_refs": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1
+    },
+    "evidence_refs": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1
+    },
+    "decision_at_utc": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "request_digest": {
+      "type": "string"
+    },
+    "audit_event_id": {
+      "type": "string"
+    },
+    "optional_reason_text": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 1000
+    },
+    "issue_reason_code": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  }
+}

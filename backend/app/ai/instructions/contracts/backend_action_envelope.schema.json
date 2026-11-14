@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Trusted backend action request; never accepted from model",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "action_id",
+    "correlation_id",
+    "trigger_kind",
+    "actor_ref",
+    "auth_context_ref",
+    "project_scope_refs",
+    "evidence_refs",
+    "policy_ref",
+    "requested_at_utc",
+    "idempotency_key"
+  ],
+  "properties": {
+    "action_id": {
+      "type": "string",
+      "pattern": "^ACT-(0[0-9]|1[0-6])$"
+    },
+    "correlation_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "trigger_kind": {
+      "type": "string",
+      "maxLength": 80
+    },
+    "actor_ref": {
+      "type": "string",
+      "maxLength": 128
+    },
+    "auth_context_ref": {
+      "type": "string",
+      "maxLength": 128
+    },
+    "project_scope_refs": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "maxLength": 128
+      },
+      "maxItems": 20
+    },
+    "evidence_refs": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "maxLength": 128
+      },
+      "maxItems": 50
+    },
+    "policy_ref": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 128
+    },
+    "requested_at_utc": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "idempotency_key": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    }
+  }
+}

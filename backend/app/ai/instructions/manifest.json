@@ -1,0 +1,312 @@
+{
+  "manifest_version": "1.0",
+  "pack_name": "Agent Timmy Action Instruction Pack",
+  "as_of": "2026-11-14",
+  "runtime_path": "backend/app/ai/instructions",
+  "load_order": [
+    "system/MAIN_SYSTEM.md",
+    "shared/REQUEST_LIFECYCLE.md",
+    "shared/DATA_SECURITY_AND_PROMPT_INJECTION.md",
+    "shared/IDENTITY_ALIASES.md",
+    "shared/SOURCE_AUTHORITIES_AND_GATES.md",
+    "shared/AUDIT_ISSUES_REPORTS.md",
+    "actions/<selected-action>.md"
+  ],
+  "schemas": {
+    "agent_response": "contracts/agent_response.schema.json",
+    "backend_action_envelope": "contracts/backend_action_envelope.schema.json",
+    "tool_result": "contracts/tool_result.schema.json",
+    "review_decision": "contracts/review_decision.schema.json"
+  },
+  "classification_ref": "contracts/document_classification.json",
+  "policy_references": [
+    {
+      "path": "docs/policies/session_policy_contract_v1.0.md",
+      "status": "APPROVED_HUMAN_CONTROLLED_READ_ONLY"
+    },
+    {
+      "path": "docs/policies/session_policy_addendum_v1.1_cross_project_authorization.md",
+      "status": "APPROVED_HUMAN_CONTROLLED_READ_ONLY"
+    }
+  ],
+  "qwen_may_write_persistent": false,
+  "langgraph_tool_bindings_are_conceptual": true,
+  "actions": [
+    {
+      "action_id": "ACT-00",
+      "title": "Initialize / route a trusted workflow",
+      "prompt_path": "actions/ACT-00_workflow_dispatch.md",
+      "trigger": "authenticated user request OR approved locally scheduled event, not a spreadsheet cell",
+      "allowed_read_capabilities": [
+        "validation.read_findings"
+      ],
+      "authority": "BACKEND_ROUTED_NOT_LLM",
+      "prompt_access": "READ_ONLY",
+      "model_persistent_write": false,
+      "output_schema": "contracts/agent_response.schema.json",
+      "status": "SPECIFIED_NOT_IMPLEMENTED"
+    },
+    {
+      "action_id": "ACT-01",
+      "title": "Receive / classify uploaded evidence",
+      "prompt_path": "actions/ACT-01_receive_classify_file.md",
+      "trigger": "file upload accepted at protected FastAPI upload endpoint",
+      "allowed_read_capabilities": [
+        "source.describe_file"
+      ],
+      "authority": "BACKEND_ROUTED_NOT_LLM",
+      "prompt_access": "READ_ONLY",
+      "model_persistent_write": false,
+      "output_schema": "contracts/agent_response.schema.json",
+      "status": "SPECIFIED_NOT_IMPLEMENTED"
+    },
+    {
+      "action_id": "ACT-02",
+      "title": "Ingest authoritative planning sheet",
+      "prompt_path": "actions/ACT-02_planning_ingest.md",
+      "trigger": "authorized upload/sync of designated planning spreadsheet source",
+      "allowed_read_capabilities": [
+        "source.describe_file",
+        "source.read_redacted_rows",
+        "planning.read_approved",
+        "mapping.propose"
+      ],
+      "authority": "BACKEND_ROUTED_NOT_LLM",
+      "prompt_access": "READ_ONLY",
+      "model_persistent_write": false,
+      "output_schema": "contracts/agent_response.schema.json",
+      "status": "SPECIFIED_NOT_IMPLEMENTED"
+    },
+    {
+      "action_id": "ACT-03",
+      "title": "Ingest verified staff directory / identity mappings",
+      "prompt_path": "actions/ACT-03_staff_directory_ingest.md",
+      "trigger": "authorized upload of verified staff source or approved human alias correction",
+      "allowed_read_capabilities": [
+        "source.describe_file",
+        "source.read_redacted_rows",
+        "staff.read_masked_directory",
+        "mapping.propose"
+      ],
+      "authority": "BACKEND_ROUTED_NOT_LLM",
+      "prompt_access": "READ_ONLY",
+      "model_persistent_write": false,
+      "output_schema": "contracts/agent_response.schema.json",
+      "status": "SPECIFIED_NOT_IMPLEMENTED"
+    },
+    {
+      "action_id": "ACT-04",
+      "title": "Ingest session/hour timesheets (Excel/CSV)",
+      "prompt_path": "actions/ACT-04_timesheet_ingest.md",
+      "trigger": "authorized timesheet upload or acknowledged reimport after correction",
+      "allowed_read_capabilities": [
+        "source.describe_file",
+        "source.read_redacted_rows",
+        "mapping.propose"
+      ],
+      "authority": "BACKEND_ROUTED_NOT_LLM",
+      "prompt_access": "READ_ONLY",
+      "model_persistent_write": false,
+      "output_schema": "contracts/agent_response.schema.json",
+      "status": "SPECIFIED_NOT_IMPLEMENTED"
+    },
+    {
+      "action_id": "ACT-05",
+      "title": "Normalize source fields without rewriting evidence",
+      "prompt_path": "actions/ACT-05_normalize_stage.md",
+      "trigger": "parsed staging rows ready; authorized confirmed source field mapping",
+      "allowed_read_capabilities": [
+        "source.read_redacted_rows",
+        "mapping.propose"
+      ],
+      "authority": "BACKEND_ROUTED_NOT_LLM",
+      "prompt_access": "READ_ONLY",
+      "model_persistent_write": false,
+      "output_schema": "contracts/agent_response.schema.json",
+      "status": "SPECIFIED_NOT_IMPLEMENTED"
+    },
+    {
+      "action_id": "ACT-06",
+      "title": "Validate verified staff, project, activity and role",
+      "prompt_path": "actions/ACT-06_identity_activity_role_validate.md",
+      "trigger": "normalized work claims available for deterministic validation",
+      "allowed_read_capabilities": [
+        "planning.read_approved",
+        "staff.read_masked_directory",
+        "validation.read_findings"
+      ],
+      "authority": "BACKEND_ROUTED_NOT_LLM",
+      "prompt_access": "READ_ONLY",
+      "model_persistent_write": false,
+      "output_schema": "contracts/agent_response.schema.json",
+      "status": "SPECIFIED_NOT_IMPLEMENTED"
+    },
+    {
+      "action_id": "ACT-07",
+      "title": "Validate six-session activity and exact two-role coverage",
+      "prompt_path": "actions/ACT-07_session_coverage_validate.md",
+      "trigger": "session-based claims normalized, staff/activity/role mapping checks complete",
+      "allowed_read_capabilities": [
+        "activity.read_sessions",
+        "validation.read_findings",
+        "reports.read_authority_status"
+      ],
+      "authority": "BACKEND_ROUTED_NOT_LLM",
+      "prompt_access": "READ_ONLY",
+      "model_persistent_write": false,
+      "output_schema": "contracts/agent_response.schema.json",
+      "status": "SPECIFIED_NOT_IMPLEMENTED"
+    },
+    {
+      "action_id": "ACT-08",
+      "title": "Validate hours-based individual claims without guessing rates",
+      "prompt_path": "actions/ACT-08_hours_validate.md",
+      "trigger": "hours-based normalized work record entered and role/identity/plan verified",
+      "allowed_read_capabilities": [
+        "hours.read_entries",
+        "validation.read_findings",
+        "reports.read_authority_status"
+      ],
+      "authority": "BACKEND_ROUTED_NOT_LLM",
+      "prompt_access": "READ_ONLY",
+      "model_persistent_write": false,
+      "output_schema": "contracts/agent_response.schema.json",
+      "status": "SPECIFIED_NOT_IMPLEMENTED"
+    },
+    {
+      "action_id": "ACT-09",
+      "title": "Detect discrepancies, route authorized review and preserve history",
+      "prompt_path": "actions/ACT-09_exceptions_human_review.md",
+      "trigger": "validation defect, competing claim, unresolved mapping, or authorized review response",
+      "allowed_read_capabilities": [
+        "validation.read_findings",
+        "issues.read_timeline"
+      ],
+      "authority": "BACKEND_ROUTED_NOT_LLM",
+      "prompt_access": "READ_ONLY",
+      "model_persistent_write": false,
+      "output_schema": "contracts/agent_response.schema.json",
+      "status": "SPECIFIED_NOT_IMPLEMENTED"
+    },
+    {
+      "action_id": "ACT-10",
+      "title": "Consume authoritative report validation and freeze cutoff",
+      "prompt_path": "actions/ACT-10_report_authority_validate.md",
+      "trigger": "verified external report submission/resubmission/validation evidence imported or refreshed",
+      "allowed_read_capabilities": [
+        "reports.read_authority_status",
+        "activity.read_sessions",
+        "validation.read_findings"
+      ],
+      "authority": "BACKEND_ROUTED_NOT_LLM",
+      "prompt_access": "READ_ONLY",
+      "model_persistent_write": false,
+      "output_schema": "contracts/agent_response.schema.json",
+      "status": "SPECIFIED_NOT_IMPLEMENTED"
+    },
+    {
+      "action_id": "ACT-11",
+      "title": "Calculate eligible credits, payment groups and allocation review",
+      "prompt_path": "actions/ACT-11_entitlements_pooling_allocation.md",
+      "trigger": "session activity becomes fully COMPLETE plus authoritative report VALIDATED; or pool reevaluation after new validated credits/human decision",
+      "allowed_read_capabilities": [
+        "finance.read_group_proposals",
+        "validation.read_findings",
+        "planning.read_approved"
+      ],
+      "authority": "BACKEND_ROUTED_NOT_LLM",
+      "prompt_access": "READ_ONLY",
+      "model_persistent_write": false,
+      "output_schema": "contracts/agent_response.schema.json",
+      "status": "SPECIFIED_NOT_IMPLEMENTED"
+    },
+    {
+      "action_id": "ACT-12",
+      "title": "Prepare immutable payment batch and record authorized approval",
+      "prompt_path": "actions/ACT-12_exact_batch_approval.md",
+      "trigger": "eligible fully allocated obligations selected for payment request",
+      "allowed_read_capabilities": [
+        "finance.read_batch_digest",
+        "validation.read_findings"
+      ],
+      "authority": "BACKEND_ROUTED_NOT_LLM",
+      "prompt_access": "READ_ONLY",
+      "model_persistent_write": false,
+      "output_schema": "contracts/agent_response.schema.json",
+      "status": "SPECIFIED_NOT_IMPLEMENTED"
+    },
+    {
+      "action_id": "ACT-13",
+      "title": "Export approved payment instructions to finance (not transfer)",
+      "prompt_path": "actions/ACT-13_payment_export.md",
+      "trigger": "authorized export action referencing exact approved immutable batch",
+      "allowed_read_capabilities": [
+        "finance.read_batch_digest"
+      ],
+      "authority": "BACKEND_ROUTED_NOT_LLM",
+      "prompt_access": "READ_ONLY",
+      "model_persistent_write": false,
+      "output_schema": "contracts/agent_response.schema.json",
+      "status": "SPECIFIED_NOT_IMPLEMENTED"
+    },
+    {
+      "action_id": "ACT-14",
+      "title": "Ingest returned payment evidence and reconcile settlement",
+      "prompt_path": "actions/ACT-14_external_payment_reconciliation.md",
+      "trigger": "authorized, verified external payment return file arrives/refreshes",
+      "allowed_read_capabilities": [
+        "payments.read_returns",
+        "finance.read_batch_digest",
+        "validation.read_findings"
+      ],
+      "authority": "BACKEND_ROUTED_NOT_LLM",
+      "prompt_access": "READ_ONLY",
+      "model_persistent_write": false,
+      "output_schema": "contracts/agent_response.schema.json",
+      "status": "SPECIFIED_NOT_IMPLEMENTED"
+    },
+    {
+      "action_id": "ACT-15",
+      "title": "Generate weekly/manual historical operational report",
+      "prompt_path": "actions/ACT-15_operational_report_generation.md",
+      "trigger": "authorized weekly scheduler or manual project/month report request",
+      "allowed_read_capabilities": [
+        "issues.read_timeline",
+        "validation.read_findings",
+        "audit.read_scoped",
+        "finance.read_group_proposals"
+      ],
+      "authority": "BACKEND_ROUTED_NOT_LLM",
+      "prompt_access": "READ_ONLY",
+      "model_persistent_write": false,
+      "output_schema": "contracts/agent_response.schema.json",
+      "status": "SPECIFIED_NOT_IMPLEMENTED"
+    },
+    {
+      "action_id": "ACT-16",
+      "title": "Record and inspect audit trail / postcondition evidence",
+      "prompt_path": "actions/ACT-16_audit_and_integrity.md",
+      "trigger": "all sensitive reads, writes, blocked actions, model suggestions, human decisions and reconciliation events",
+      "allowed_read_capabilities": [
+        "audit.read_scoped",
+        "issues.read_timeline"
+      ],
+      "authority": "BACKEND_ROUTED_NOT_LLM",
+      "prompt_access": "READ_ONLY",
+      "model_persistent_write": false,
+      "output_schema": "contracts/agent_response.schema.json",
+      "status": "SPECIFIED_NOT_IMPLEMENTED"
+    }
+  ],
+  "advisory_evaluators": {
+    "input": "evaluators/INPUT_EVALUATOR.md",
+    "output": "evaluators/OUTPUT_EVALUATOR.md",
+    "security": "evaluators/SECURITY_EVALUATOR.md",
+    "narrative": "evaluators/NARRATIVE_EVALUATOR.md",
+    "reconciliation": "evaluators/RECONCILIATION_EVALUATOR.md"
+  },
+  "auth_policy_ref": "contracts/capability_policy.json",
+  "sources_and_blockers_ref": "contracts/authorities_and_open_fields.json",
+  "proof_of_work": "NOT_EXECUTED",
+  "critical_note": "Policies remain backend-only; actions/prompts cannot authorize financial decisions."
+}

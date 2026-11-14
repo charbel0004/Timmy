@@ -1,0 +1,166 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Agent Timmy Qwen response (non-authoritative)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "action_id",
+    "correlation_id",
+    "response_kind",
+    "language",
+    "summary",
+    "evidence_refs",
+    "rule_refs",
+    "issues",
+    "mapping_proposals",
+    "human_question",
+    "verification_note"
+  ],
+  "properties": {
+    "action_id": {
+      "type": "string",
+      "pattern": "^ACT-(0[0-9]|1[0-6])$"
+    },
+    "correlation_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "response_kind": {
+      "enum": [
+        "explanation",
+        "proposal",
+        "needs_human",
+        "blocked",
+        "no_action"
+      ]
+    },
+    "language": {
+      "enum": [
+        "en",
+        "ar"
+      ]
+    },
+    "summary": {
+      "type": "string",
+      "maxLength": 1000
+    },
+    "evidence_refs": {
+      "type": "array",
+      "uniqueItems": true,
+      "maxItems": 24,
+      "items": {
+        "type": "string",
+        "maxLength": 128
+      }
+    },
+    "rule_refs": {
+      "type": "array",
+      "uniqueItems": true,
+      "maxItems": 24,
+      "items": {
+        "type": "string",
+        "maxLength": 100
+      }
+    },
+    "issues": {
+      "type": "array",
+      "maxItems": 20,
+      "items": {
+        "$ref": "#/$defs/issue"
+      }
+    },
+    "mapping_proposals": {
+      "type": "array",
+      "maxItems": 20,
+      "items": {
+        "$ref": "#/$defs/mapping"
+      }
+    },
+    "human_question": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 700
+    },
+    "verification_note": {
+      "type": "string",
+      "maxLength": 500
+    }
+  },
+  "$defs": {
+    "issue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "issue_code",
+        "subject_ref",
+        "evidence_refs",
+        "suggested_next_step"
+      ],
+      "properties": {
+        "issue_code": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "subject_ref": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "evidence_refs": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 12,
+          "items": {
+            "type": "string",
+            "maxLength": 128
+          }
+        },
+        "suggested_next_step": {
+          "type": "string",
+          "maxLength": 400
+        }
+      }
+    },
+    "mapping": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mapping_type",
+        "source_token_ref",
+        "canonical_candidate",
+        "supporting_refs",
+        "requires_human_confirmation"
+      ],
+      "properties": {
+        "mapping_type": {
+          "enum": [
+            "header",
+            "role",
+            "staff_candidate"
+          ]
+        },
+        "source_token_ref": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "canonical_candidate": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "supporting_refs": {
+          "type": "array",
+          "maxItems": 12,
+          "items": {
+            "type": "string",
+            "maxLength": 128
+          }
+        },
+        "requires_human_confirmation": {
+          "const": true
+        }
+      }
+    }
+  }
+}

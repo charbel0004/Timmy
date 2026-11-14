@@ -27,7 +27,7 @@ def escape(value):
     return re.sub(r"([^\w\s])", r"\\\1", " ".join(value.split()))
 
 
-def preview(documents, *, snapshot=None, report_cutoffs=None):
+def preview(documents, *, snapshot=None, report_cutoffs=None, project_codes=None):
     plans = defaultdict(set)
     directory = defaultdict(set)
     claims = defaultdict(list)
@@ -35,6 +35,7 @@ def preview(documents, *, snapshot=None, report_cutoffs=None):
     evidence = defaultdict(set)
     seen = set()
     matched = False
+    excluded = 0
     sheet_decisions = []
     for file, record in documents:
         fingerprint = (file.project_id, file.sha256)
@@ -70,6 +71,10 @@ def preview(documents, *, snapshot=None, report_cutoffs=None):
             for source in rows[1:]:
                 row = dict(zip(headers, (str(value or "").strip() for value in source["values"])))
                 key = (file.project_id, row.get("project_code", ""), row.get("activity_code", ""))
+                expected_code = (project_codes or {}).get(file.project_id)
+                if kind != "directory" and expected_code and key[1] != expected_code:
+                    excluded += 1
+                    continue
                 if kind == "planning":
                     plans[key].add((row.get("approved_start_date", ""), row.get("approved_end_date", "")))
                 elif kind == "directory":
@@ -102,6 +107,8 @@ def preview(documents, *, snapshot=None, report_cutoffs=None):
         snapshot["sheets"] = sheet_decisions
     for item in sheet_decisions:
         lines.append(f"- {escape(item['filename'])} / {escape(item['sheet'])}: {item['kind']}, {item['reason']}.")
+    if excluded:
+        lines.append(f"Excluded {excluded} planning or timesheet rows outside the registered project code.")
     if not claims:
         lines.append("The recognized timesheet has no source claims.")
     for key in sorted(claims):
@@ -143,7 +150,9 @@ def preview(documents, *, snapshot=None, report_cutoffs=None):
             f"\n**{escape(project or 'Unknown project')} / {escape(activity or 'Unknown activity')}**",
             f"- Status: {status} · {len(result.accepted) // 2}/6 session pairs · {len(result.accepted)}/12 role slots.",
             f"- Preview issues: {', '.join(f'{code} ({count})' for code, count in sorted(codes.items())) or 'None detected'}.",
-            "- Authority blockers: PLANNING_APPROVAL_EVIDENCE_REQUIRED, STAFF_VERIFICATION_REQUIRED, REPORT_VALIDATION_EVIDENCE_REQUIRED.",
+            "- Authority blockers: PLANNING_APPROVAL_EVIDENCE_REQUIRED, STAFF_VERIFICATION_REQUIRED"
+            + ("." if report else ", REPORT_VALIDATION_EVIDENCE_REQUIRED."),
+            *([f"- Frozen report cutoff: {report['cutoff']}."] if report else []),
             "- Next: have the planning and identity owners verify the references, then obtain validation from the approved external report source.",
             "- Payment eligible: No.",
             f"- Timesheet evidence: {', '.join(escape(name) for name in sorted(evidence[key]))}.",

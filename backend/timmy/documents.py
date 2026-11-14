@@ -249,6 +249,15 @@ def spreadsheet_profile(record):
             "sheet": index, "rows": len(source), "header_row": source[0]["row"] if source else None,
             "candidate_fields": fields,
         })
+    # Include category-specific fields, rather than classifying every document
+    # with the old timesheet-only display allowlist.
+    from .column_mappings import propose_sheet
+    labels = {'staff_id': 'staff identifier', 'timesheet_submitted_date': 'submission date'}
+    for index, sheet in enumerate(record.sheets):
+        from types import SimpleNamespace
+        candidate = propose_sheet(SimpleNamespace(id='', original_filename=''), sheet, index)
+        summaries[index]['category'] = candidate['kind']
+        summaries[index]['candidate_fields'] = [labels.get(field, field.replace('_', ' ')) for field in candidate['columns']]
     return summaries
 
 
@@ -262,6 +271,10 @@ def resolve_documents(db, principal, conversation_id, project_id=None, document_
     explicit = db.execute(visible.where(StoredFile.id.in_(ids))).all() if ids else []
     if len(explicit) != len(ids):
         raise HTTPException(404, "A selected document is unavailable in this scope")
+    if ids:
+        if len(ids) > 20:
+            raise HTTPException(422, "Select at most 20 spreadsheets")
+        return sorted(explicit, key=lambda row: row[0].id)
     automatic = visible.where(
         DocumentImport.conversation_id == conversation_id
     ) if project_id is None else visible.where(or_(
@@ -316,16 +329,18 @@ def persist_validation(project_id: int, request: Request, principal: Authenticat
         raise HTTPException(409, "Select an active project")
     documents = resolve_documents(db, principal, None, project_id)
     cutoffs = project_report_cutoffs(db, project_id)
+    project_code = db.scalar(select(projects.c.project_code).where(projects.c.id == project_id))
     cutoff_key = ":".join(f"{value['id']}@{value['cutoff']}" for value in cutoffs.values())
-    fingerprint = sha256(("structural-v2:" + cutoff_key + ":" + str(principal.user.id) + ":" + ":".join(sorted(file.id for file, _ in documents))).encode()).hexdigest()
+    fingerprint = sha256(("structural-v3:" + (project_code or "") + ":" + cutoff_key + ":" + str(principal.user.id) + ":" + ":".join(sorted(file.id for file, _ in documents))).encode()).hexdigest()
     existing = db.scalar(select(StructuralValidation).where(
         StructuralValidation.project_id == project_id, StructuralValidation.fingerprint == fingerprint,
         StructuralValidation.actor_id == principal.user.id,
     ))
     if existing:
-        return {"id": existing.id, "activities": existing.snapshot["activities"]}
+        return validation_view(readable_validation(db, principal, existing.id))
     snapshot = {"claims": [], "activities": []}
-    if preview(documents, snapshot=snapshot, report_cutoffs=cutoffs) is None or not snapshot["activities"]:
+    if preview(documents, snapshot=snapshot, report_cutoffs=cutoffs,
+               project_codes={project_id: project_code}) is None or not snapshot["activities"]:
         raise HTTPException(422, "No supported session claims in the visible project documents")
     event = StructuralValidation(project_id=project_id, actor_id=principal.user.id,
                                  fingerprint=fingerprint, created_at=int(time()), snapshot=snapshot)
@@ -334,7 +349,7 @@ def persist_validation(project_id: int, request: Request, principal: Authenticat
     audit(db, "structural_validation_saved", principal.user.id, resource_type="structural_validation",
           resource_id=str(event.id), outcome="authority_pending")
     db.commit()
-    return {"id": event.id, "activities": snapshot["activities"]}
+    return validation_view(event)
 
 
 @router.get("/structural-validation/{project_id}")
@@ -345,7 +360,20 @@ def latest_validation(project_id: int, principal: Authenticated, db: Database):
     event = db.scalar(select(StructuralValidation).where(
         StructuralValidation.project_id == project_id, StructuralValidation.actor_id == principal.user.id,
     ).order_by(StructuralValidation.id.desc()).limit(1))
-    return {"id": event.id, "activities": event.snapshot["activities"]} if event else None
+    if event is None:
+        return None
+    event = readable_validation(db, principal, event.id)
+    return validation_view(event)
+
+
+def validation_view(event):
+    return {"id": event.id, "project_id": event.project_id, "activities": event.snapshot["activities"]}
+
+
+@router.get("/validation/{validation_id}")
+def get_validation(validation_id: int, principal: Authenticated, db: Database):
+    event = readable_validation(db, principal, validation_id)
+    return validation_view(event)
 
 
 class EvidenceDecision(BaseModel):

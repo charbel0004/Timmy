@@ -1,3 +1,5 @@
+import { DemoWorkbook } from "./demo-workbook";
+import { workspaceLocation } from "./workspace-location";
 import { AccessManagement } from "./iam";
 import { Administration, PasswordScreen } from "./workspace";
 import { useEffect, useState } from "react";
@@ -28,22 +30,20 @@ const pages = {
 } as const;
 type Page = keyof typeof pages;
 
-function currentPage(): Page {
-  const value = window.location.hash.slice(1);
-  return Object.hasOwn(pages, value) ? value as Page : "assistant";
-}
-
 function Workspace({ session, onExit, onSession }: { session: Session; onExit: () => void; onSession: (session: Session) => void }) {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeId, setActiveId] = useState<string>();
   const [chatVersion, setChatVersion] = useState(0);
   const [historyError, setHistoryError] = useState("");
   const [chatBusy, setChatBusy] = useState(false);
-  const [page, setPage] = useState(currentPage);
+  const [hash, setHash] = useState(() => window.location.hash);
+  const location = workspaceLocation(hash);
+  const page: Page = Object.hasOwn(pages, location.page) ? location.page as Page : "assistant";
+  const { validationId } = location;
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   useEffect(() => {
-    const change = () => setPage(currentPage());
+    const change = () => setHash(window.location.hash);
     window.addEventListener("hashchange", change);
     return () => window.removeEventListener("hashchange", change);
   }, []);
@@ -152,13 +152,15 @@ function Workspace({ session, onExit, onSession }: { session: Session; onExit: (
               append={append} canReadProjects={canReadProjects} csrfToken={session.csrf_token}
               onBusy={setChatBusy} /> : <p role="alert">Permission denied.</p>}
           </>}
+          {session.demo_mode && (page === "dashboard" || page === "projects" || page === "imports" || page === "batches")
+            && <DemoWorkbook key={page} show={page} />}
           {page === "dashboard" && (canReadProjects ? <Dashboard /> : <p role="alert">Permission denied.</p>)}
           {page === "settings" && (canReadSettings ? <SettingsPanel /> : <p role="alert">Permission denied.</p>)}
           {(page === "projects" || page === "activities") &&
             (visible(page) ? <Administration key={page} page={page} session={session} /> : <p role="alert">Permission denied.</p>)}
           {(page === "access" || page === "users" || page === "roles") &&
             (visible("access") ? <AccessManagement session={session} /> : <p role="alert">Permission denied.</p>)}
-          {page === "imports" && canReadProjects && <><DocumentHistory /><StructuralReview session={session} /></>}
+          {page === "imports" && canReadProjects && <><DocumentHistory /><StructuralReview key={validationId ?? "project"} session={session} validationId={validationId} /></>}
           {(page === "imports" || page === "timesheets" || page === "discrepancies" || page === "batches") &&
             (canReadProjects ? <OperationsPage key={page} section={page} /> : <p role="alert">Permission denied.</p>)}
           {page === "security" && <PasswordScreen session={session} onDone={(value) => {

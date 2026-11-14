@@ -299,3 +299,8 @@ button.secondary:hover, .chat-table tbody tr:hover { background: #eef4fa; }
 .voice-controls audio { max-width:100%; height:2.25rem; }
 .composer-actions { flex-wrap:wrap; }
 .message-actions { flex-wrap:wrap; }
+
+details.assistant-activity { display: block; }
+details.assistant-activity summary { cursor: pointer; font-weight: 600; }
+details.assistant-activity ol { margin: .4rem 0; padding-inline-start: 1.25rem; }
+details.assistant-activity code { overflow-wrap: anywhere; }

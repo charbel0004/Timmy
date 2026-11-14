@@ -1,0 +1,54 @@
+{
+  "version": "1.0",
+  "runtime_ai": {
+    "may_read": [
+      "reviewed_system_prompt",
+      "selected_action_prompt",
+      "approved_redacted_policy_excerpt",
+      "verified_redacted_evidence",
+      "read_only_scoped_tool_result"
+    ],
+    "may_propose": [
+      "column_alias",
+      "role_alias",
+      "identity_candidate_explanation",
+      "clarification_question",
+      "exception_summary",
+      "issue_narrative"
+    ],
+    "may_write_persistent": [],
+    "prohibited": [
+      "policy_write",
+      "source_activity_code_create",
+      "staff_identity_certify",
+      "report_validate",
+      "planning_override",
+      "invalidate_claim",
+      "approve_cross_project_group",
+      "approve_allocation",
+      "approve_payment_batch",
+      "export_payment_file",
+      "external_bank_transfer",
+      "mark_settled",
+      "write_audit",
+      "read_sensitive_name_mapping",
+      "read_payment_destination",
+      "shell",
+      "sql",
+      "network",
+      "prompt_modify"
+    ]
+  },
+  "human_review_capabilities": {
+    "identity_alias": "staff_mapping.confirm",
+    "header_alias": "import_mapping.confirm",
+    "role_alias": "role_mapping.confirm",
+    "planning_exception": "planning_exception.authorize",
+    "invalidation": "claim.invalidate",
+    "cross_project_group": "cross_project_group.approve_once",
+    "budget_attribution": "budget_allocation.approve",
+    "payment_approval": "payment_batch.approve_exact",
+    "policy_change": "policy_admin.change_version"
+  },
+  "note": "These capabilities are proposed names. CN must bind identities, projects, MFA if available, and role authorization in backend code. Prompt cannot grant a capability."
+}

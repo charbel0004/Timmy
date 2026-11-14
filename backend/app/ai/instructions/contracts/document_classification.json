@@ -1,0 +1,70 @@
+{
+  "version": "1.0",
+  "entries": [
+    {
+      "glob": "system/*.md",
+      "classification": "GIT_VERSIONED_PROMPT_READ_ONLY",
+      "model_read": "selected_prompt_only",
+      "model_write": false
+    },
+    {
+      "glob": "actions/ACT-*.md",
+      "classification": "GIT_VERSIONED_PROMPT_READ_ONLY",
+      "model_read": "selected_action_only",
+      "model_write": false
+    },
+    {
+      "glob": "shared/*.md",
+      "classification": "GIT_VERSIONED_PROMPT_READ_ONLY",
+      "model_read": "selected_shared_rules_only",
+      "model_write": false
+    },
+    {
+      "glob": "evaluators/*.md",
+      "classification": "GIT_VERSIONED_ADVISORY_EVAL_READ_ONLY",
+      "model_read": "selected_evaluator_only",
+      "model_write": false
+    },
+    {
+      "glob": "contracts/*.json",
+      "classification": "BACKEND_ONLY_CONTRACT",
+      "model_read": "allowlisted excerpts only",
+      "model_write": false
+    },
+    {
+      "glob": "integration/*.md",
+      "classification": "HUMAN_ENGINEERING_REFERENCE",
+      "model_read": "not required",
+      "model_write": false
+    },
+    {
+      "glob": "integration/*.py",
+      "classification": "HUMAN_ENGINEERING_REFERENCE_CODE",
+      "model_read": "never executable tool",
+      "model_write": false
+    },
+    {
+      "glob": "tests/*",
+      "classification": "SYNTHETIC_TEST_ONLY",
+      "model_read": "redacted fixtures only",
+      "model_write": false
+    },
+    {
+      "glob": "manifest.json",
+      "classification": "BACKEND_REGISTRY_READ_ONLY",
+      "model_read": "action_id/path not writable",
+      "model_write": false
+    }
+  ],
+  "other_authorities": {
+    "source_originals": "RESTRICTED_IMMUTABLE_NO_AI_READ",
+    "staff_name_mapping": "RESTRICTED_BACKEND_NO_AI_READ",
+    "payment_destination": "RESTRICTED_BACKEND_NO_AI_READ",
+    "report_status": "EXTERNAL_AUTHORITY_READ_ONLY",
+    "planning_activity": "EXTERNAL_AUTHORITY_READ_ONLY",
+    "session_policy": "BACKEND_LOCKED_POLICY_AI_READ_ONLY",
+    "hours_policy": "UNCONFIGURED_MONEY_FAIL_CLOSED",
+    "model_outputs": "EPHEMERAL_DRAFT_UNTRUSTED",
+    "audit_ledger": "APPEND_ONLY_BACKEND_OWNED"
+  }
+}

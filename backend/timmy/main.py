@@ -1,10 +1,14 @@
 from contextlib import asynccontextmanager
+import asyncio
+from contextlib import suppress
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 
+from .payment_configuration import router as payment_policy_router
+from .demo_operations import router as demo_router
 from .config import Settings, settings
 from .database import make_engine
 from .documents import router as document_router
@@ -12,7 +16,10 @@ from .routes import router
 from .voice import router as voice_router
 from .workspace import AuthLimit, router as workspace_router
 from .operations import router as operations_router
+from .chat_activity import ChatActivity
 from .chat_routes import router as chat_router
+from .workflows import router as workflow_router
+from .workflow_scheduler import scheduler_loop
 
 
 def create_app(config: Settings | None = None) -> FastAPI:
@@ -21,10 +28,18 @@ def create_app(config: Settings | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         app.state.engine = make_engine(config.database_url)
+        activity = app.state.chat_activity = ChatActivity()
+        scheduler = asyncio.create_task(scheduler_loop(app.state.engine, config)) if config.weekly_enabled else None
         try:
             yield
         finally:
+            if scheduler:
+                scheduler.cancel()
+                with suppress(asyncio.CancelledError):
+                    await scheduler
             app.state.engine.dispose()
+            for handler in activity.logger.handlers:
+                handler.close()
 
     app = FastAPI(title="Agent Timmy", lifespan=lifespan, docs_url=None, redoc_url=None)
     app.state.config = config
@@ -49,7 +64,10 @@ def create_app(config: Settings | None = None) -> FastAPI:
     app.include_router(voice_router)
     app.include_router(operations_router)
     app.include_router(chat_router)
+    app.include_router(workflow_router)
     app.include_router(workspace_router)
+    app.include_router(payment_policy_router)
+    app.include_router(demo_router)
     return app
 
 

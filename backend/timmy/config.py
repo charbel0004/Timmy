@@ -22,6 +22,9 @@ class Settings(BaseSettings):
     demo_mode: bool = False
     report_source: str | None = None
     report_timezone: str | None = None
+    weekly_enabled: bool = False
+    weekly_actor_id: int | None = Field(default=None, gt=0)
+    weekly_project_ids: list[int] = Field(default_factory=list)
     document_root: Path = Path(".timmy-data/documents")
     whisper_model: str = "small"
     whisper_device: str = "cpu"

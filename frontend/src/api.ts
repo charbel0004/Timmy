@@ -39,9 +39,27 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export interface DocumentRecord { id: string; project_id: number; filename: string; rows: number; status: string; sha256: string }
+export interface ConversationWorkflow {
+  stage: string;
+  scope?: { project_id: number; source_ids: string[]; source_rows: number };
+  scope_fresh?: boolean;
+  mapping?: { id: string; version: number; fingerprint: string; status: string; effective_status?: string;
+    categories: Record<string, string[]>;
+    sheets: { file_id: string; filename: string; sheet_index: number; kind: string;
+      headers: string[]; columns: Record<string, number> }[] } | null;
+  validation?: { status: string; run_id?: number; started_at?: string; completed_at?: string; error_code?: string } | null;
+  blockers?: string[];
+}
 export const documentDownload = (id: string) => `${base}/documents/${id}/download`;
 
 export const api = {
+  workflowState: (conversation: string) => request<ConversationWorkflow>(`/chat/conversations/${conversation}/workflow`),
+  confirmMapping: (conversation: string, proposal: string, version: number, fingerprint: string,
+    sheets: { file_id: string; sheet_index: number; kind: string; columns: Record<string, number> }[], csrf: string) =>
+    request<{ message: string; workflow: ConversationWorkflow }>(`/chat/conversations/${conversation}/mappings/${proposal}/confirm`, {
+      method: "POST", headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf },
+      body: JSON.stringify({ version, fingerprint, sheets }),
+    }),
   documentMetrics: () => request<{ documents: number; source_rows: number }>("/documents/metrics"),
   documents: (conversation?: string) => request<DocumentRecord[]>(conversation ? `/documents?conversation_id=${conversation}` : "/documents"),
   uploadDocument: (project: number, conversation: string, file: File, csrf: string) =>
@@ -61,6 +79,8 @@ export const api = {
   createConversation: (csrf: string) => request<Conversation>("/chat/conversations", {
     method: "POST", headers: { "X-CSRF-Token": csrf },
   }),
+  assistantActivity: (id: string, requestId: string) =>
+    request<{ steps: string[] }>(`/chat/conversations/${id}/activity/${requestId}`),
   sendMessage: (id: string, message: string, csrf: string, requestId: string, projectId?: number) =>
     request<ChatReply>(`/chat/conversations/${id}/messages`, {
       method: "POST", headers: { "X-CSRF-Token": csrf, "Content-Type": "application/json" },
