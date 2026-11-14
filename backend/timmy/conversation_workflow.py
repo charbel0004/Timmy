@@ -6,6 +6,7 @@ remains separate. No background queue is created or claimed.
 """
 import copy
 import json
+import logging
 import re
 from datetime import datetime, timezone
 from hashlib import sha256
@@ -20,6 +21,10 @@ from .documents import resolve_documents, project_report_cutoffs
 from .models import EvidenceReview, MappingProposal, StructuralValidation, WorkflowRun
 from .workflows import run_workflow, render_run, choose_workflow
 from .session_preview import escape
+from .failure_diagnostics import classify
+
+logger = logging.getLogger(__name__)
+from .workflow_state_machine import validate_state_change
 
 CONFIRM = re.compile(r'^(yes+s*|yess+|confirmed|confirm|ok(?:ay)?|proceed|continue|نعم|موافق|تم التأكيد)[.!\s]*$',re.I)
 MAPPING_CONFIRM = re.compile(r'^(?:column )?mappings? confirmed[.!\s]*(?:proceed)?[.!\s]*$',re.I)
@@ -50,7 +55,9 @@ def check_integrity(config, documents):
 
 
 def save_state(conversation, state):
-    # Assign a new JSON object so SQLAlchemy tracks every nested transition.
+    # Explicitly validate the persisted transition and its required companion
+    # fields. SQLAlchemy needs a fresh JSON object for nested changes.
+    validate_state_change(conversation.workflow_state, state)
     conversation.workflow_state=copy.deepcopy(state)
 
 
@@ -251,9 +258,17 @@ def complete_validation(db,principal,config,conversation,proposal,documents,stat
             state['blockers']=['STAFF_VERIFICATION_REQUIRED','PLANNING_APPROVAL_EVIDENCE_REQUIRED']
             if any('REPORT_VALIDATION_EVIDENCE_REQUIRED' in step['issue_codes'] for step in run.snapshot['steps']):
                 state['blockers'].append('REPORT_VALIDATION_EVIDENCE_REQUIRED')
-    except Exception:
-        # Never serialize exception text: parsed rows, destinations and credentials may occur there.
-        state['validation'].update(status='failed',completed_at=utc_stamp(),error_code='STRUCTURAL_VALIDATION_FAILED')
+    except Exception as error:
+        # Keep raw exception strings and data out of model context and receipts.
+        failure = classify(error, step="STRUCTURAL_VALIDATION")
+        logger.error("Structural validation stopped code=%s correlation_id=%s error_type=%s",
+                     failure.code, failure.correlation_id, failure.exception_type)
+        state['validation'].update(
+            status='failed', completed_at=utc_stamp(),
+            error_code='STRUCTURAL_VALIDATION_FAILED',
+            diagnostic_code=failure.code, correlation_id=failure.correlation_id,
+            failed_step='validate_activity',
+        )
         state['stage']='VALIDATION_FAILED';state['blockers']=['STRUCTURAL_VALIDATION_FAILED']
         state.pop('result',None)
     state['pending']=None

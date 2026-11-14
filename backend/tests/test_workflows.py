@@ -82,7 +82,10 @@ def test_weekly_steps_block_finance_and_use_same_api_runner(workspace):
     assert [s['step'] for s in body['steps']] == expected
     assert body['status'] == 'blocked'
     assert body['steps'][-1]['step'] == 'export_payment_request'
-    assert 'EXACT_BATCH_APPROVAL_REQUIRED' in body['steps'][-1]['issue_codes']
+    assert 'DEPENDENCY_NOT_SATISFIED' in body['steps'][-1]['issue_codes']
+    assert 'EXACT_BATCH_APPROVAL_REQUIRED' in body['steps'][-1]['unverified_requirements']
+    assert body['steps'][-1]['blocked_by'] == 'check_planning'
+    assert body['steps'][-1]['executed'] is False
     replay = c.post('/api/workflows/runs',headers=h,json={'request_id':key,'project_id':1,'workflow_id':'weekly_cycle'})
     assert replay.json() == body
     last = c.get('/api/workflows/last-run/1').json()
@@ -215,3 +218,182 @@ def test_workflow_endpoints_require_scope_and_csrf(workspace):
     assert c.post('/api/workflows/runs',headers=h,json=payload|{'workflow_id':'approve_payment'}).status_code==422
     c.post('/api/auth/login',headers=ORIGIN,json={'username':'unknown','password':PASSWORD})
     assert c.get('/api/workflows/last-run/1').status_code==403
+
+def test_failed_weekly_handler_is_recorded_and_not_retried(workspace, monkeypatch):
+    from timmy import workflow_scheduler
+    c, _, _ = workspace
+    config = c.app.state.config
+    config.weekly_enabled = True
+    config.weekly_actor_id = 99
+    config.weekly_project_ids = [1]
+    attempts = []
+
+    def fails_once(*args, **kwargs):
+        attempts.append(kwargs['request_key'])
+        raise ValueError('sensitive input must not be logged or persisted')
+
+    monkeypatch.setattr(workflow_scheduler, 'run_workflow', fails_once)
+    due = datetime(2026, 11, 16, 2, 0, tzinfo=timezone.utc)
+    assert workflow_scheduler.run_due(c.app.state.engine, config, due) == []
+    assert workflow_scheduler.run_due(c.app.state.engine, config, due) == []
+    assert len(attempts) == 1
+    with Session(c.app.state.engine) as db:
+        marker = db.scalar(select(WorkflowRun).where(WorkflowRun.request_key == attempts[0]))
+        assert marker.status == 'failed'
+        assert marker.snapshot['steps'][0]['issue_codes'] == ['SCHEDULED_EXECUTION_FAILED']
+        assert 'sensitive input' not in str(marker.snapshot)
+
+
+def test_weekly_http_failure_is_held_without_retry(workspace, monkeypatch):
+    from fastapi import HTTPException
+    from timmy import workflow_scheduler
+    c, _, _ = workspace
+    config = c.app.state.config
+    config.weekly_enabled = True
+    config.weekly_actor_id = 99
+    config.weekly_project_ids = [1]
+    attempts = []
+    def rejects(*args, **kwargs):
+        attempts.append(1)
+        raise HTTPException(409, 'untrusted details')
+    monkeypatch.setattr(workflow_scheduler, 'run_workflow', rejects)
+    due = datetime(2026, 11, 16, 2, 0, tzinfo=timezone.utc)
+    workflow_scheduler.run_due(c.app.state.engine, config, due)
+    workflow_scheduler.run_due(c.app.state.engine, config, due)
+    assert attempts == [1]
+    with Session(c.app.state.engine) as db:
+        marker = db.scalar(select(WorkflowRun).where(
+            WorkflowRun.request_key == 'weekly:2026-W47:1'))
+        assert marker.status == 'blocked'
+        assert marker.snapshot['steps'][0]['issue_codes'] == ['SCHEDULED_HTTP_409']
+
+def test_unexecuted_validation_exposes_only_provisional_evidence(workspace):
+    c, h, _ = workspace
+    response = c.post('/api/workflows/runs', headers=h,
+                      json={'request_id': str(uuid4()), 'project_id': 1,
+                            'workflow_id': 'process_activity'})
+    assert response.status_code == 201
+    steps = response.json()['steps']
+    hold = next(row for row in steps if row['step'] == 'validate_activity')
+    assert hold['executed'] is False
+    assert hold['attempted'] is False
+    assert hold['structural_preview_only'] is True
+    assert hold['evidence_kind'] == 'provisional_structural_preview'
+
+def test_workflow_step_receipts_are_committed_and_scoped(workspace):
+    from timmy.models import WorkflowStepReceipt
+    c,h,_ = workspace
+    response=c.post('/api/workflows/runs',headers=h,json={
+        'request_id':str(uuid4()),'project_id':1,'workflow_id':'weekly_cycle'})
+    assert response.status_code==201,response.text
+    run_id=response.json()['id']
+    with Session(c.app.state.engine) as db:
+        rows=list(db.scalars(select(WorkflowStepReceipt).where(
+            WorkflowStepReceipt.run_id==run_id).order_by(WorkflowStepReceipt.step_index)))
+        assert len(rows)==len(response.json()['steps'])
+        assert [row.step_id for row in rows]==[row['step'] for row in response.json()['steps']]
+        assert all(not row.executed for row in rows[1:])
+        assert rows[1].blocked_by=='check_planning'
+
+
+def test_manual_continuation_is_new_immutable_run_and_no_finance(workspace):
+    c,h,_=workspace
+    response=c.post('/api/workflows/runs',headers=h,json={
+        'request_id':str(uuid4()),'project_id':1,'workflow_id':'weekly_cycle'})
+    original=response.json()['id']
+    key=str(uuid4())
+    route=f'/api/workflows/runs/{original}/resume'
+    resumed=c.post(route,headers=h,json={'request_id':key})
+    assert resumed.status_code==201,resumed.text
+    body=resumed.json()
+    assert body['id'] != original
+    assert body['resumed_from_run_id']==original
+    assert body['steps'][-1]['executed'] is False
+    assert c.post(route,headers=h,json={'request_id':key}).json() == body
+    with Session(c.app.state.engine) as db:
+        previous=db.get(WorkflowRun,original)
+        assert previous.snapshot.get('resumed_from_run_id') is None
+        current=db.get(WorkflowRun,body['id'])
+        assert current.snapshot['resumed_from_run_id']==original
+        assert current.snapshot['resume_mode']=='fresh_evidence_revalidation'
+    assert c.post(route,headers=ORIGIN,json={'request_id':str(uuid4())}).status_code==403
+
+
+def test_cannot_resume_completed_intake_or_cross_parent(workspace):
+    c,h,_=workspace
+    first=c.post('/api/workflows/runs',headers=h,json={
+        'request_id':str(uuid4()),'project_id':1,'workflow_id':'analyze_intake'})
+    assert first.json()['status']=='completed'
+    denied=c.post(f"/api/workflows/runs/{first.json()['id']}/resume",
+                  headers=h,json={'request_id':str(uuid4())})
+    assert denied.status_code==409
+
+def test_typed_payment_return_upload_triggers_unverified_reconciliation_hold(workspace):
+    c,h,conv=workspace
+    data=b'batch,reference,result\nSYNTHETIC,EXAMPLE,pending\n'
+    uploaded=c.post('/api/documents',
+        params={'filename':'synthetic-return.csv','project_id':1,
+                'purpose':'payment_return','conversation_id':conv},
+        content=data,headers=h|{'Content-Type':'text/csv'})
+    assert uploaded.status_code==201,uploaded.text
+    body=uploaded.json()
+    assert body['status']=='PAYMENT_RETURN_RECEIVED_UNVERIFIED'
+    assert isinstance(body['workflow_run_id'],int)
+    with Session(c.app.state.engine) as db:
+        run=db.get(WorkflowRun,body['workflow_run_id'])
+        assert run.workflow_id=='payment_return'
+        assert run.status=='blocked'
+        assert run.request_key=='payment_return:upload:'+body['id']
+        assert run.snapshot['payment_return_file_id']==body['id']
+        first,second=run.snapshot['steps'][:2]
+        assert first['step']=='receive_payment_report'
+        assert first['status']=='completed'
+        assert first['authority']=='UNVERIFIED_UPLOAD_ONLY'
+        assert 'TRUSTED_PAYMENT_REPORT_ADAPTER_REQUIRED' in second['issue_codes']
+        assert not any(s.get('status')=='completed' for s in run.snapshot['steps'][1:])
+    visible=c.get('/api/documents',params={'conversation_id':conv})
+    assert visible.status_code==200
+    assert body['id'] not in [row['id'] for row in visible.json()]
+    from timmy.models import payment_batches
+    with Session(c.app.state.engine) as db:
+        assert db.scalar(select(payment_batches.c.id).limit(1)) is None
+
+
+def test_generic_timesheet_upload_never_triggers_payment_return(workspace):
+    c,h,conv=workspace
+    with Session(c.app.state.engine) as db:
+        assert db.scalar(select(WorkflowRun).where(
+            WorkflowRun.workflow_id=='payment_return')) is None
+    result=c.post('/api/documents',
+        params={'filename':'generic.csv','project_id':1,'conversation_id':conv},
+        content=b'a,b\n1,2\n',headers=h|{'Content-Type':'text/csv'})
+    assert result.status_code==201,result.text
+    assert result.json()['workflow_run_id'] is None
+    with Session(c.app.state.engine) as db:
+        assert db.scalar(select(WorkflowRun).where(
+            WorkflowRun.workflow_id=='payment_return')) is None
+
+def test_payment_return_download_is_permission_scoped(workspace):
+    c,h,conv=workspace
+    result=c.post('/api/documents',
+        params={'filename':'return.csv','project_id':1,
+                'purpose':'payment_return','conversation_id':conv},
+        content=b'ref,status\nSYNTHETIC,pending\n',
+        headers=h|{'Content-Type':'text/csv'})
+    assert result.status_code==201,result.text
+    file_id=result.json()['id']
+    downloaded=c.get(f'/api/documents/{file_id}/download')
+    assert downloaded.status_code==200
+    assert downloaded.content==b'ref,status\nSYNTHETIC,pending\n'
+
+def test_legacy_intake_purpose_remains_visible_after_payment_category_added(workspace):
+    from sqlalchemy import update
+    c,h,conv=workspace
+    with Session(c.app.state.engine) as db,db.begin():
+        file=db.scalar(select(StoredFile).where(StoredFile.original_filename=='claims.csv'))
+        file_id=file.id
+        file.purpose='intake'
+    visible=c.get('/api/documents',params={'conversation_id':conv})
+    assert visible.status_code==200
+    assert file_id in [row['id'] for row in visible.json()]
+    assert c.get(f'/api/documents/{file_id}/download').status_code==200
