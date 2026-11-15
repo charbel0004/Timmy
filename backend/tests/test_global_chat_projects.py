@@ -35,10 +35,10 @@ def test_global_chat_upload_maps_both_projects_and_stops_financial_work(client, 
     headers = ORIGIN | {"X-CSRF-Token": login.json()["csrf_token"]}
     cid = client.post("/api/chat/conversations", headers=headers).json()["id"]
 
-    csv = ("project_code,activity_code,approved_start_date,approved_end_date\\n"
-           "TCD,26-TCD-001,2026-09-01,2026-09-30\\n"
-           "FOS,26-FOS-001,2026-09-01,2026-09-30\\n"
-           "BAD,26-BAD-999,2026-09-01,2026-09-30\\n")
+    csv = ("project_code,activity_code,approved_start_date,approved_end_date\n"
+           "TCD,26-TCD-001,2026-09-01,2026-09-30\n"
+           "FOS,26-FOS-001,2026-09-01,2026-09-30\n"
+           "BAD,26-BAD-999,2026-09-01,2026-09-30\n")
     uploaded = client.post("/api/documents", params={"filename":"planning.csv","conversation_id":cid},
                            content=csv.encode(), headers=headers | {"Content-Type":"text/csv"})
     assert uploaded.status_code == 201, uploaded.text
