@@ -87,7 +87,19 @@ def run_global_workflow(db, principal, config, conversation, documents, *, workf
         elif project['policy_family']=='hours':
             from .hourly_preview import preview_hours
             provisional=preview_hours(prepared,project['project_code'],snapshot=structural)
+            # Review only activities claimed by this conversation's HOURS source.
+            # The project registry also contains historical activities from other imports.
+            from .column_mappings import propose_sheet
+            claimed_codes=set()
+            for file,record in scoped_views:
+                for index,sheet in enumerate(record.sheets):
+                    selection=propose_sheet(file,sheet,index)
+                    column=selection['columns'].get('activity_code')
+                    if selection['kind']=='hours' and column is not None:
+                        claimed_codes.update(str(row['values'][column] or '').strip()
+                            for row in sheet['rows'][1:] if column<len(row['values']))
             for key,activity in activity_registry.items():
+                if key[2] not in claimed_codes:continue
                 structural['activities'].append(dict(project_code=key[1],activity_code=key[2],activity_id=activity['id'],
                     structure='FLAGGED' if structural.get('hourly_parse_issues') or any(c['blockers'] for c in structural.get('hourly_candidates',[])) else 'PASSED',
                     session_pairs=0,role_slots=0,issues={},planning='PENDING',staff='PENDING',report='PENDING',
@@ -144,8 +156,9 @@ def run_global_workflow(db, principal, config, conversation, documents, *, workf
         validation=None
         if confirmed and structural['activities']:
             from .models import StructuralValidation
-            validation_key=sha256(json.dumps(['global-structural-v2',proposal.id,sorted((str(k),v) for k,v in cutoffs.items()),
-                                           sorted(str(k) for k in activity_registry)],sort_keys=True).encode()).hexdigest()
+            relevant_codes={a['activity_code'] for a in structural['activities']}
+            validation_key=sha256(json.dumps(['global-structural-v3',proposal.id,sorted((str(k),v) for k,v in cutoffs.items() if k[2] in relevant_codes),
+                                           sorted(str(k) for k in activity_registry if k[2] in relevant_codes)],sort_keys=True).encode()).hexdigest()
             validation=db.scalar(select(StructuralValidation).where(StructuralValidation.project_id==project_id,
                                                                     StructuralValidation.fingerprint==validation_key))
             if validation is None and workflow_id!='show_issues':

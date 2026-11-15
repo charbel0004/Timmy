@@ -246,3 +246,38 @@ def test_import_history_shows_new_mapping_review_instead_of_old_confirmation(coo
             version=previous.version+100,sheets=previous.sheets,created_at=previous.created_at+1,status='proposed'))
     items=c.get('/api/documents',params={'conversation_id':conv}).json()
     assert all(item['status']=='PARSED_MAPPING_REQUIRED' for item in items)
+
+
+def test_hours_review_does_not_require_unrelated_historical_activity(coordinator):
+    from timmy.models import activities,StructuralValidation
+    c,h,conv=coordinator
+    with Session(c.app.state.engine) as db,db.begin():
+        db.execute(insert(activities).values(id=999,project_id=2,name='Unrelated historical activity',
+            activity_code='26-FOS-999',code_authority='source_supplied',planned_start='2026-01-01',planned_end='2026-01-31'))
+    load(coordinator,'01_Happy_Path');declare(coordinator)
+    state=c.get(f'/api/chat/conversations/{conv}/workflow').json()
+    run=next(r for r in state['project_runs'] if r['project_id']==2)
+    validation=c.get(f'/api/documents/validation/{run["validation_id"]}').json()
+    assert [a['activity_code'] for a in validation['activities']]==['26-FOS-001']
+    review(coordinator)
+    assert len(c.get(f'/api/workflow-payments/conversations/{conv}').json())==2
+    with Session(c.app.state.engine) as db,db.begin():
+        db.execute(insert(activities).values(id=998,project_id=2,name='Another unrelated activity',
+            activity_code='26-FOS-998',code_authority='source_supplied',planned_start='2026-01-01',planned_end='2026-01-31'))
+    reply=c.post(f'/api/chat/conversations/{conv}/messages',headers=h,
+        json={'message':'Process the documents and prepare a final payment request.','request_id':str(uuid4())})
+    assert reply.status_code==200,reply.text
+    current=c.get(f'/api/chat/conversations/{conv}/workflow').json()
+    refreshed=next(r for r in current['project_runs'] if r['project_id']==2)
+    assert refreshed['validation_id']==run['validation_id']
+    assert refreshed['steps'][0]['status']=='completed'
+
+
+def test_deleting_conversation_with_payment_evidence_returns_conflict_without_losing_history(coordinator):
+    c,h,conv=coordinator;ready_draft(coordinator)
+    before=c.get(f'/api/chat/conversations/{conv}').json()
+    response=c.delete(f'/api/chat/conversations/{conv}',headers=h)
+    assert response.status_code==409,response.text
+    assert 'retained' in response.json()['detail']
+    assert c.get(f'/api/chat/conversations/{conv}').json()==before
+    assert c.get(f'/api/workflow-payments/conversations/{conv}').json()
