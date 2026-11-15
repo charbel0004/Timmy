@@ -316,13 +316,7 @@ details.assistant-activity code { overflow-wrap: anywhere; }
   --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
   --motion-fast: 160ms; --motion-normal: 220ms; --motion-large: 320ms; --ease: cubic-bezier(.2,.7,.3,1);
 }
-:root[data-theme="dark"] {
-  color-scheme: dark;
-  --background: #0c111d; --surface: #141b2a; --surface-raised: #192233; --surface-hover: #202c40;
-  --ink: #e9edf7; --muted: #a3b0c6; --line: #2c374b; --action: #426edb; --teal: #83d8bb;
-  --cyan: #73d1f4; --violet: #bdabff; --success: #83d8bb; --review: #f4c36d; --failure: #ff9aa2;
-  --selected: #233555; --shadow: 0 3px 14px #00000008;
-}
+
 html { scrollbar-gutter: stable; }
 body { margin: 0; background: var(--background); color: var(--ink); font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 14px; -webkit-font-smoothing: antialiased; }
 a, button, input, select, summary { -webkit-tap-highlight-color: transparent; }
@@ -559,3 +553,4 @@ select { min-width: 0; max-width: 100%; }
 .brand-mark:has(.agent-avatar) { padding: 0; overflow: hidden; background: transparent; box-shadow: none; }
 .assistant-chat .assistant-mark:has(.agent-avatar) { width: 76px; height: 76px; background: transparent; box-shadow: none; }
 .chat-message .agent-avatar.message-avatar { width: 32px; height: 32px; }
+.release-notice { position: fixed; z-index: 100; bottom: 1rem; right: 1rem; max-width: calc(100vw - 2rem); display: flex; flex-wrap: wrap; align-items: center; gap: .8rem; padding: .8rem 1rem; border: 1px solid var(--cyan); background: var(--surface); color: var(--ink); border-radius: 10px; box-shadow: 0 4px 20px #18223816; font-size: .8rem; }

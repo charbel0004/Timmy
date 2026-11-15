@@ -26,7 +26,7 @@ export function Badge({ children, tone = "neutral" }: {
 export function AgentAvatar({ className = "", size = 36 }: { className?: string; size?: number }) {
   const [unavailable, setUnavailable] = useState(false);
   return unavailable ? <Sparkles className={className} size={size} aria-hidden="true" />
-    : <img src="/assets/timmy-avatar.png" className={`agent-avatar ${className}`} width={size} height={size}
+    : <img src="/assets/timmy-avatar.webp" className={`agent-avatar ${className}`} width={size} height={size}
         alt="" onError={() => setUnavailable(true)} />;
 }
 

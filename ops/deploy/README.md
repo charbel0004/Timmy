@@ -122,3 +122,24 @@ reader, install the reviewed deploy script through the existing operator process
 For rollback, retain schema 0019 and switch application code to the compatible
 0018 release using the existing rollback command. The manifest reader validates
 the reverse relationship. Never restore a pre-migration backup over live writes.
+
+### Browser refresh and release notices
+
+The UI is light-only and discards the old `timmy-theme` preference. Each build
+publishes `app-version.json`; open clients check it without HTTP caching on focus
+and once per minute. A new release offers a Reload app button using a unique
+HTML URL. It preserves the current route and does not clear login cookies or
+interrupt an in-progress task with an automatic reload.
+
+For a browser still running a release from before this update, open
+`/refresh.html` once. This new entry point loads `/?_timmy_refresh=<timestamp>`
+and bypasses an old HTML cache entry without requiring incognito. Previously
+loaded JavaScript cannot be changed remotely until the browser navigates.
+
+The current public Nginx response has no explicit Cache-Control for HTML. An
+operator with server access should additionally set HTML responses to
+`Cache-Control: no-cache` in the existing SPA location (including its index.html
+fallback), then validate with `nginx -t` before reloading Nginx. Hashed Vite assets
+may retain long cache lifetimes. A repository change to the deploy script alone
+cannot update the installed root-owned Nginx configuration. No cache-clearing
+response should remove authentication cookies or browser-stored user documents.
