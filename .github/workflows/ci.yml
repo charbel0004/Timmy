@@ -1,10 +1,6 @@
 name: Agent Timmy CI
 
 on:
-  pull_request:
-    branches:
-      - main
-
   push:
     branches:
       - main
@@ -14,7 +10,7 @@ permissions:
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: false
 
 jobs:
 
