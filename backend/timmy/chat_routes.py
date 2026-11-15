@@ -211,7 +211,16 @@ async def send(conversation_id: UUID, payload: SendMessage, request: Request, pr
     try:
         result = await answer(conversation_id, payload, request, principal, db, identifier, record)
     except HTTPException as error:
-        record("Request stopped", status=error.status_code)
+        # Keep private resource details out of telemetry. These are constant,
+        # documented error classes, not user-controlled exception text.
+        safe_codes = {
+            "Conversation unavailable": "CHAT_CONVERSATION_UNAVAILABLE",
+            "A selected document is unavailable in this scope": "CHAT_DOCUMENT_SCOPE_UNAVAILABLE",
+            "No active mapping proposal is available in this conversation": "CHAT_MAPPING_PROPOSAL_UNAVAILABLE",
+        }
+        code = safe_codes.get(error.detail) if isinstance(error.detail, str) else None
+        record("Request stopped", status=error.status_code,
+               code=code or "CHAT_HTTP_REJECTED")
         raise
     except Exception as error:
         failure = classify(error, step="CHAT_REQUEST")
