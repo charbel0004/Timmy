@@ -320,7 +320,7 @@ async def answer(conversation_id, payload, request, principal, db, identifier, r
         if any(file.project_id is None for file, _ in available) or len({file.project_id for file, _ in available}) > 1:
             record("Executing guarded global workflow with per-project receipts")
             return run_global_workflow(db, actor, config, active_conversation, available,
-                                       workflow_id=workflow_id, request_id=request_id)
+                                       workflow_id=workflow_id, request_id=request_id, on_step=record)
         if workflow_id in {'analyze_intake', 'process_activity'}:
             return handle_message(db, actor, config, active_conversation,
                                   'Analyze' if workflow_id == 'analyze_intake' else 'Process',
@@ -390,7 +390,7 @@ async def answer(conversation_id, payload, request, principal, db, identifier, r
     elif multi_project_documents and choose_workflow(payload.message) in {'analyze_intake', 'process_activity', 'show_issues'}:
         selection = choose_workflow(payload.message)
         reply = run_global_workflow(db, principal, config, conversation, documents,
-                                    workflow_id=selection, request_id=request_id)
+                                    workflow_id=selection, request_id=request_id, on_step=record)
         record("Recorded guarded per-project workflow steps for global conversation")
         # Persist the actual bounded workflow receipt summary in chat history.
         # Unlike ad-hoc source previews, it is safe and must survive reload.
