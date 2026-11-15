@@ -53,7 +53,7 @@ def test_isolated_backend_checks_ignore_hostile_checkout_env(tmp_path):
 
 def test_live_deploy_uses_reviewed_migration_without_database_restore():
     script = SCRIPT.read_text(encoding="utf-8")
-    assert '[[ $revision == 0016 && $expected == 0017 ]]' in script
+    assert '[[ $revision == "$from_revision" && $expected == "$to_revision" ]]' in script
     assert 'aea0fbd39b71978cac927a4ec859ec817332ab48' in script
     assert '.schema-bridge' in script
     assert 'PRAGMA integrity_check' in script

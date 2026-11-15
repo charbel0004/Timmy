@@ -42,4 +42,4 @@ Current new API/DB draft stores only the selected family in `projects.policy_fam
 
 ## Deployment note
 
-Migration `0018` is an additive new column on projects, and the deployed API is migration-gated. The current GitHub main deployment script explicitly allowlists a prior `0016 → 0017` bridge. **Do not merge/deploy migration 0018 until CN separately reviews migration, runner compatibility, backup, activation path, and rollback safety.** No production database changes are authorized by this design note.
+Migration `0018` adds a nullable column to projects. The deployment contract and one-time readiness bridge for the currently active release are documented in [the deployment runbook](../../ops/deploy/README.md).

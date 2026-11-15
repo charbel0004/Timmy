@@ -86,18 +86,41 @@ else
 fi
 echo "Active: $active_sha on $active; candidate: $requested on $slot"
 
-# Admit only the reviewed additive 0017 file over the known bridge.
+# Admit only a declared, blob-pinned additive migration over a compatible release.
 migrations() { git -C "$REPOSITORY" rev-parse "$1:backend/migrations"; }
 migrate=false
+compatible_rollback=false
+reviewed_transition() {
+  local older=$1 newer=$2
+  local manifest=ops/deploy/additive-migration
+  local declaration migration blob extra
+  declaration=$(git -C "$REPOSITORY" show "$newer:$manifest" 2>/dev/null) || return 1
+  [[ $declaration != *$'\n'* ]] || return 1
+  read -r from_revision to_revision migration blob extra <<< "$declaration" || return 1
+  [[ -z $extra && $from_revision =~ ^[a-zA-Z0-9_]+$ && $to_revision =~ ^[a-zA-Z0-9_]+$ &&
+     $from_revision != "$to_revision" && $migration =~ ^backend/migrations/versions/[a-zA-Z0-9_]+\.py$ &&
+     $blob =~ ^[0-9a-f]{40}$ &&
+     $(git -C "$REPOSITORY" diff --name-status "$older" "$newer" -- backend/migrations) == $'A\t'"$migration" &&
+     $(git -C "$REPOSITORY" rev-parse "$newer:$migration") == "$blob" ]] || return 1
+  [[ -f $base/releases/$older/.additive-schema-compatible &&
+     -O $base/releases/$older/.additive-schema-compatible ]] ||
+    git -C "$REPOSITORY" cat-file -e "$older:$manifest"
+}
 if [[ $(migrations "$active_sha") != "$(migrations "$requested")" ]]; then
   if $rollback && [[ -f $base/releases/$requested/.schema-bridge ]]; then
     echo 'Rollback to bridge supports revision 0017'
+  elif $rollback && reviewed_transition "$requested" "$active_sha"; then
+    compatible_rollback=true
+  elif ! $rollback && reviewed_transition "$active_sha" "$requested"; then
+    migrate=true
   else
     migration=backend/migrations/versions/0017_workflow_step_receipts.py
     [[ -f $base/releases/$active_sha/.schema-bridge &&
        $(git -C "$REPOSITORY" diff --name-status "$active_sha" "$requested" -- backend/migrations) == $'A\t'"$migration" &&
        $(git -C "$REPOSITORY" rev-parse "$requested:$migration") == aea0fbd39b71978cac927a4ec859ec817332ab48 ]] ||
       die 'Migration tree changed; requires compatibility review'
+    from_revision=0016
+    to_revision=0017
     migrate=true
   fi
 fi
@@ -181,9 +204,15 @@ fi
 
 revision=$(sqlite3 -readonly "$DATABASE" 'SELECT version_num FROM alembic_version')
 expected=$(runuser -u timmy -- "$release/.venv/bin/python" -m alembic -c "$release/backend/alembic.ini" heads | awk '{print $1}')
+if $migrate; then
+  [[ $expected == "$to_revision" && ( $revision == "$from_revision" || $revision == "$to_revision" ) ]] ||
+    die 'Declared migration differs from the live schema or candidate head'
+fi
 if [[ $revision != "$expected" ]]; then
-  if [[ $revision == 0016 && $expected == 0017 ]] && $migrate; then
-    echo 'Reviewed additive migration 0016 -> 0017'
+  if $migrate && [[ $revision == "$from_revision" && $expected == "$to_revision" ]]; then
+    echo "Reviewed additive migration $from_revision -> $to_revision"
+  elif $compatible_rollback && [[ $revision == "$to_revision" && $expected == "$from_revision" ]]; then
+    echo "Rollback release supports schema $revision"
   elif [[ $revision == 0017 && -f $release/.schema-bridge ]]; then
     echo 'Bridge is compatible with 0017'
   else
@@ -194,10 +223,10 @@ backup=$(mktemp "$base/backups/timmy.XXXXXXXX")
 sqlite3 -readonly "$DATABASE" ".backup '$backup'"
 [[ $(sqlite3 -readonly "$backup" 'PRAGMA integrity_check') == ok ]] || die 'SQLite backup failed integrity check'
 echo 'SQLite backup verified'
-if $migrate && [[ $revision == 0016 ]]; then
+if $migrate && [[ $revision == "$from_revision" ]]; then
   runuser -u timmy -- env TIMMY_DATABASE_URL="sqlite:///$DATABASE" PYTHONPATH="$release/backend" \
-    "$release/.venv/bin/python" -m alembic -c "$release/backend/alembic.ini" upgrade 0017
-  [[ $(sqlite3 -readonly "$DATABASE" 'SELECT version_num FROM alembic_version') == 0017 ]]
+    "$release/.venv/bin/python" -m alembic -c "$release/backend/alembic.ini" upgrade "$to_revision"
+  [[ $(sqlite3 -readonly "$DATABASE" 'SELECT version_num FROM alembic_version') == "$to_revision" ]]
   health "http://127.0.0.1:$active" || die 'Bridge health failed after additive migration'
 fi
 switch_link "$release" "$base/slot-$slot"

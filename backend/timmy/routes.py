@@ -32,7 +32,8 @@ def live():
 @router.get("/health")
 def health(db: Database):
     try:
-        db.execute(text("SELECT version_num FROM alembic_version WHERE version_num = '0018'")).scalar_one()
+        db.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+        db.execute(text("SELECT policy_family FROM projects LIMIT 0"))
     except SQLAlchemyError:
         raise HTTPException(503, "Database unavailable or migrations pending") from None
     return {"status": "ok"}

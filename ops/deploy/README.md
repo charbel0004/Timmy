@@ -74,3 +74,27 @@ Verify the database revision with `sqlite3 -readonly "$DATABASE" 'SELECT version
 - The deployment waits for the old Nginx worker processes to exit before stopping the previous backend. Weekly background scheduling must be off. If old workers remain after four minutes, the previous service stays up and the next deploy refuses to reuse its port. Verify the workers and any direct loopback traffic have drained before disabling and stopping that service.
 - A failed readiness check leaves the original route in place. A post-switch failure restores the saved routing when the old backend is healthy. The candidate stays up to drain. Inspect Nginx workers before stopping it. If automatic restoration fails, leave both slots running and repair routing from the last verified release.
 - After two versioned releases, run `sudo /usr/local/sbin/timmy-deploy --rollback` (or `sudo ops/deploy/rollback.sh`) to health-check the retained release on the standby slot and switch back. For the initial migration, rollback manually using the saved legacy Nginx configuration and original service, confirming that it still points to the authoritative shared database and document directory. Rollback never rewinds the database.
+
+### Additive schema releases
+
+For a reviewed additive migration, update `ops/deploy/additive-migration` with one
+line containing the live revision, new revision, repository-relative migration
+path, and its `git hash-object` value. The runner requires exactly that one new
+migration file. Keep the declaration in subsequent releases. Review that both
+backends can read and write the upgraded schema during overlap, including rows
+written by either version. Readiness probes should check required schema
+capabilities so they continue to pass after a compatible upgrade. The runner
+verifies a SQLite backup before upgrading and retains the prior app for rollback
+on the upgraded database. Changes outside this contract require a separate plan.
+
+For the first `0017 → 0018` rollout, install the updated root-owned runner using
+the installation command above. The live `2c410f0` release predates compatible
+readiness. With the route and current release verified as `2c410f0` on port
+8000 and the database at `0017`, update that release's readiness predicate from
+`WHERE version_num = '0017'` to `WHERE version_num IN ('0017', '0018')`.
+Restart `timmy-api@8000.service` during a brief maintenance window and confirm
+both slot and public readiness. Create the root-owned
+`/opt/timmy-deploy/current/.additive-schema-compatible` marker only after
+verifying the patched release. Then rerun the failed deploy for the latest
+CI-verified main SHA. Subsequent additive releases use the declaration and
+existing runner.
