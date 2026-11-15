@@ -132,8 +132,7 @@ def render_project_discovery(result, *, processing_requested=False, workflow_rec
                  "approval, staff verification, external-report validation or payment authority.")
     if workflow_receipts:
         lines.append("Separate guarded per-project workflow receipts follow. "
-                     "Only intake/routing is verified; planning, reports, staff and money "
-                     "remain outside the current multi-project authority adapters.")
+                     "Only intake/routing is verified by this summary; the following receipts identify actual planning, reporting, staff and financial progress.")
     elif processing_requested:
         lines.append("MULTI_PROJECT_EXECUTION_ADAPTER_REQUIRED: The current workflow runner "
                      "still requires one verified project per run. No financial or planning "

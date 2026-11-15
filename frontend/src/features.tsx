@@ -216,7 +216,7 @@ const instructionMetadata = () => request<{ instruction_set: string; version: st
 
 
 type Validation = { id: number; project_id: number; activities: Array<{
-  project_code: string; activity_code: string; structure: string; session_pairs: number; role_slots: number;
+  policy_family?: string; project_code: string; activity_code: string; structure: string; session_pairs: number; role_slots: number;
   planning: string; staff: string; report: string; eligibility: string; approval: string; settlement: string;
   issues: Record<string, number>; review_tasks: string[];
   report_evidence?: { id: number; cutoff: string; version: string } | null;
@@ -318,7 +318,7 @@ export function StructuralReview({ session, validationId }: { session: Session; 
     {saved && <><p role="status">Saved validation #{saved.id}</p>
       {saved.activities.map((item) => <article key={JSON.stringify([item.project_code, item.activity_code])}>
         <h3>{item.project_code} / {item.activity_code}</h3>
-        <p>{item.structure} · {item.session_pairs}/6 session pairs · {item.role_slots}/12 role slots</p>
+        <p>{item.structure}{item.policy_family === "hours" ? " · HOURS source checks" : ` · ${item.session_pairs}/6 session pairs · ${item.role_slots}/12 role slots`}</p>
         <p>Planning: {item.planning} · Identity: {item.staff} · External report: {item.report}</p>
         <p>Eligibility: {item.eligibility} · Approval: {item.approval} · Settlement: {item.settlement}</p>
         {item.report_evidence && <p>Frozen cutoff: {item.report_evidence.cutoff} · Validated version: {item.report_evidence.version}</p>}
@@ -326,4 +326,15 @@ export function StructuralReview({ session, validationId }: { session: Session; 
         <ul>{[...Object.keys(item.issues), ...item.review_tasks].map((code) => <li key={code}>{code}</li>)}</ul>
       </article>)}</>}
   </section>;
+}
+
+const workflowDefinitions = () => request<{version:string;workflows:{id:string;label:string;trigger:string;steps:{step:string;prerequisites:string;expected_outcome:string;next_action:string;availability:string}[]}[]}>('/workflows/definitions');
+export function WorkflowDefinitions() {
+  return <section className="glass-panel operation-panel"><h2>Workflow requirements and completion paths</h2>
+    <p className="muted">Available handlers, required evidence and remaining integrations are listed separately. A source preview does not approve a payment.</p>
+    <ApiPanel load={workflowDefinitions} render={data => <>{data.workflows.map(workflow => <details key={workflow.id} className="operation-panel"><summary>{workflow.label}</summary>
+      <p className="muted">Trigger: {workflow.trigger}</p>
+      <ol>{workflow.steps.map(step => <li key={step.step} className="operation-panel"><h3>{step.step.replaceAll('_',' ')}</h3><Badge tone={step.availability==='available'?'green':'amber'}>{step.availability.replaceAll('_',' ')}</Badge>
+        <dl className="status-list"><div><dt>Prerequisites</dt><dd>{step.prerequisites}</dd></div><div><dt>Completion evidence</dt><dd>{step.expected_outcome}</dd></div><div><dt>Next required action</dt><dd>{step.next_action}</dd></div></dl></li>)}</ol>
+    </details>)}</>} /></section>;
 }

@@ -554,3 +554,10 @@ select { min-width: 0; max-width: 100%; }
 .assistant-chat .assistant-mark:has(.agent-avatar) { width: 76px; height: 76px; background: transparent; box-shadow: none; }
 .chat-message .agent-avatar.message-avatar { width: 32px; height: 32px; }
 .release-notice { position: fixed; z-index: 100; bottom: 1rem; right: 1rem; max-width: calc(100vw - 2rem); display: flex; flex-wrap: wrap; align-items: center; gap: .8rem; padding: .8rem 1rem; border: 1px solid var(--cyan); background: var(--surface); color: var(--ink); border-radius: 10px; box-shadow: 0 4px 20px #18223816; font-size: .8rem; }
+.report-register-panel { padding: 1rem; margin: .5rem 1rem; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-raised); }
+.register-candidate { padding-block: 1rem; border-top: 1px solid var(--line); margin-top: .75rem; }
+.register-candidate h3 { font-weight: 650; }.register-candidate code { overflow-wrap: anywhere; font-size: .65rem; }
+.register-candidate form { display: grid; gap: .9rem; margin-top: .75rem; }.register-candidate select { display: block; width: 100%; }
+.register-mappings { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: .75rem; padding-block: .75rem; font-size: .72rem; }
+.register-declaration { display: flex; align-items: flex-start; gap: .75rem; font-size: .75rem; line-height: 1.7; }.register-declaration input { width: auto; flex: none; margin-top: .3rem; }
+@media(max-width:600px){.register-mappings{grid-template-columns:1fr;}.report-register-panel{margin:.5rem;}}

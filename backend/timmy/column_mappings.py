@@ -3,12 +3,14 @@ from types import SimpleNamespace
 
 SCHEMA_VERSION = 1
 REQUIRED = {
+    'hours': {'project_code','activity_code','staff_id','role','work_date','clock_in','clock_out','timesheet_submitted_date'},
+    'reports': {'project_code','activity_code','report_id','report_version','submitted_at','validation_status','validated_at','evidence_ref'},
     'claims': {'project_code','activity_code','staff_id','role','session_number','work_date','timesheet_submitted_date'},
     'planning': {'project_code','activity_code','approved_start_date','approved_end_date'},
     'directory': {'staff_id','status'},
     'projects': {'project_code','project_name'},
 }
-OPTIONAL = {'planning': {'activity_name'}}
+OPTIONAL = {'planning': {'activity_name','approval_status'}}
 ALIASES = {
     'project_code': {'project code'}, 'project_name': {'project name'},
     'activity_code': {'activity code','رمز النشاط'},
@@ -18,7 +20,11 @@ ALIASES = {
     'work_date': {'work date','activity date','date','تاريخ العمل','التاريخ'},
     'timesheet_submitted_date': {'timesheet submitted date','submission date','تاريخ التقديم'},
     'approved_start_date': {'approved start date'}, 'approved_end_date': {'approved end date'},
-    'status': {'status'},
+    'status': {'status'}, 'approval_status': {'approval status','planning status'},
+    'clock_in': {'clock in','ساعة الدخول'}, 'clock_out': {'clock out','ساعة الخروج'},
+    'report_id': {'external report reference','report id'}, 'report_version': {'version','report version'},
+    'submitted_at': {'submitted at'}, 'validation_status': {'validation status'},
+    'validated_at': {'validated at'}, 'evidence_ref': {'source evidence'},
 }
 
 
@@ -41,7 +47,11 @@ def propose_sheet(file, sheet, index):
     scores = {kind: len(required & fields.keys()) / len(required) for kind,required in REQUIRED.items()}
     # Distinctive columns beat completeness ratios: a partial timesheet must
     # not become a directory merely because staff_id is one of its two fields.
-    if {'session_number', 'work_date', 'role'} & fields.keys():
+    if {'clock_in', 'clock_out'} & fields.keys():
+        kind = 'hours'
+    elif {'report_id', 'validated_at', 'validation_status'} & fields.keys():
+        kind = 'reports'
+    elif {'session_number', 'work_date', 'role'} & fields.keys():
         kind = 'claims'
     elif {'approved_start_date', 'approved_end_date'} & fields.keys():
         kind = 'planning'
@@ -72,6 +82,10 @@ def mapping_errors(sheets):
             errors.append(f"{label}: ambiguous duplicate field(s): {', '.join(sheet['conflicts'])}.")
         if set(sheet['columns'])-required-OPTIONAL.get(sheet['kind'],set()):
             errors.append(f'{label}: unexpected canonical fields for this document category.')
+        if sheet['kind']=='planning':
+            status_columns=[i for i,h in enumerate(sheet['headers']) if normalize_header(h) in ALIASES['approval_status']]
+            if len(status_columns)==1 and sheet['columns'].get('approval_status')!=status_columns[0]:
+                errors.append(f'{label}: retain the recognized planning approval-status column; it cannot be discarded or reassigned.')
         columns=list(sheet['columns'].values())
         if (len(columns)!=len(set(columns)) or any(type(c) is not int or c<0 or c>=len(sheet['headers']) for c in columns)):
             errors.append(f'{label}: source column indices must be distinct and within the proposed header.')
@@ -89,10 +103,17 @@ def mapped_documents(documents, sheets):
             ordered=list(sorted(selection['columns']))
             source=sheet['rows']
             rows=[{'row':source[0]['row'],'values':ordered}]
+            from .source_dates import source_date
             for row in source[1:]:
                 rows.append({'row':row['row'],'values':[row['values'][selection['columns'][field]]
                              if selection['columns'][field]<len(row['values']) else None for field in ordered]})
-            normalized.append({'name':sheet['name'],'rows':rows})
+            for row in rows[1:]:
+                for i, field in enumerate(ordered):
+                    if field in {'work_date','timesheet_submitted_date','approved_start_date','approved_end_date'}:
+                        candidate = source_date(row['values'][i])
+                        if candidate is not None:
+                            row['values'][i] = candidate.isoformat()
+            normalized.append({'name':sheet['name'],'rows':rows,'source_sheet_index':index})
         result.append((file,SimpleNamespace(sheets=normalized,row_count=record.row_count)))
     return result
 

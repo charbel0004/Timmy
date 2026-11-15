@@ -67,6 +67,8 @@ def choose_workflow(message):
         return 'show_issues' if re.search(read.trigger_pattern, message, re.I) else 'clarify'
     if re.search(r'\bprocess payments?\b', message, re.I):
         return 'clarify'
+    if (re.search(r'\bprocess\b', message, re.I) and re.search(r'\bpayment request\b', message, re.I)):
+        return 'weekly_cycle'
     matches = [w.id for w in knowledge().workflows if re.search(w.trigger_pattern, message, re.I)]
     if len(matches) > 1:
         return 'clarify'
@@ -313,6 +315,13 @@ class RunRequest(BaseModel):
     request_id: UUID
     workflow_id: WorkflowID
     project_id: int = Field(gt=0)
+
+
+@router.get('/definitions')
+def definitions(principal: Authenticated):
+    principal.require('projects:read')
+    from .workflow_contracts import catalog
+    return {'version': knowledge().version, 'workflows': catalog()}
 
 
 @router.post('/runs', status_code=201)

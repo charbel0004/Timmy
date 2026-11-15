@@ -1,3 +1,6 @@
+import { WorkflowPayments } from "./workflow-payments";
+import { GlobalMappings } from "./global-mappings";
+import { ReportingRegisterPanel } from "./reporting-register";
 import { createRequestId } from "./request-id";
 import { ExecutionTimeline } from "./observatory";
 import remarkGfm from "remark-gfm";
@@ -144,9 +147,9 @@ function MappingReview({ state, conversationId, csrf, onResult }: {
   </details>;
 }
 
-export function Assistant({ conversation, append, canReadProjects, csrfToken, onBusy }: {
+export function Assistant({ conversation, append, canReadProjects, csrfToken, onBusy, canDesignateReports=false, canConfirmReports=false, projectPermissions={} }: {
   conversation?: Conversation; append: (conversationId: string, ...messages: ChatMessage[]) => void;
-  canReadProjects: boolean; csrfToken: string; onBusy: (busy: boolean) => void;
+  projectPermissions?: Record<string,string[]>; canDesignateReports?: boolean; canConfirmReports?: boolean; canReadProjects: boolean; csrfToken: string; onBusy: (busy: boolean) => void;
 }) {
   const pending = useRef<{ id?: string; message: string; requestId: string }>(undefined);
   const [draft, setDraft] = useState("");
@@ -205,6 +208,14 @@ export function Assistant({ conversation, append, canReadProjects, csrfToken, on
     );
     return () => { active = false; };
   }, [conversation?.id, conversation?.messages.length]);
+
+  function refreshAfterEvidence() {
+    if (!conversation?.id) return;
+    api.conversation(conversation.id).then(updated=>{
+      const known=new Set(messages.map(m=>m.id));
+      append(conversation.id,...updated.messages.filter(m=>!known.has(m.id)));
+    }).catch(err=>setError(errorMessage(err)));
+  }
 
   function selectFiles(event: ChangeEvent<HTMLInputElement>) {
     const selected = Array.from(event.currentTarget.files ?? []);
@@ -321,8 +332,11 @@ export function Assistant({ conversation, append, canReadProjects, csrfToken, on
           const knownIds = new Set(messages.map((message) => message.id));
           append(conversation.id, ...persistedMessages.filter((message) => !knownIds.has(message.id)));
         }} />}
+      <GlobalMappings conversation={conversation?.id} csrf={csrfToken} canConfirm={canConfirmReports} revision={messages.length+documents.length} onResumed={refreshAfterEvidence} />
+      <ReportingRegisterPanel onResumed={refreshAfterEvidence} conversation={conversation?.id} csrf={csrfToken} canDesignate={canDesignateReports} canConfirm={canConfirmReports} revision={messages.length+documents.length} />
+      <WorkflowPayments conversation={conversation?.id} csrf={csrfToken} permissions={projectPermissions} revision={messages.length+documents.length} onResumed={refreshAfterEvidence} />
       <form className="chat-composer" onSubmit={submit}>
-        <p className="muted"><Badge tone="cyan">Local Ollama</Badge> Files are available across your authorized projects. Timmy matches source rows by approved project and activity codes.</p>
+        <p className="muted"><Badge tone="cyan">Guarded operations</Badge> Files are available across your authorized projects. Timmy matches source rows by approved project and activity codes.</p>
         <label htmlFor="chat-input" className="sr-only">Message Agent Timmy</label>
         <textarea ref={textarea} id="chat-input" dir="auto" rows={2} placeholder="Message Agent Timmy…" maxLength={1500} value={draft}
           readOnly={busy} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => {

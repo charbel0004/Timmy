@@ -355,3 +355,73 @@ class ExecutionEvent(Base):
     run_id: Mapped[str] = mapped_column(ForeignKey("execution_runs.id", ondelete="CASCADE"), index=True)
     sequence_number: Mapped[int]
     payload: Mapped[dict] = mapped_column(JSON)
+
+
+class ReportingRegisterSource(Base):
+    __tablename__ = 'reporting_register_sources'
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    name: Mapped[str] = mapped_column(String(160))
+    project_ids: Mapped[list] = mapped_column(JSON)
+    approved_by: Mapped[int] = mapped_column(ForeignKey('users.id'))
+    approved_at: Mapped[int]
+
+
+class ReportingRegisterImport(Base):
+    __tablename__ = 'reporting_register_imports'
+    __table_args__ = (UniqueConstraint('source_id', 'actor_id', 'sha256'),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    source_id: Mapped[str] = mapped_column(ForeignKey('reporting_register_sources.id'))
+    file_id: Mapped[str] = mapped_column(ForeignKey('stored_files.id'))
+    actor_id: Mapped[int] = mapped_column(ForeignKey('users.id'))
+    sha256: Mapped[str] = mapped_column(String(64))
+    mapping_digest: Mapped[str] = mapped_column(String(64))
+    mappings: Mapped[list] = mapped_column(JSON)
+    rows: Mapped[list] = mapped_column(JSON)
+    confirmed_at: Mapped[str] = mapped_column(String(40))
+    assurance: Mapped[str] = mapped_column(String(60))
+
+
+class ReportingRegisterDecision(Base):
+    __tablename__ = 'reporting_register_decisions'
+    __table_args__ = (UniqueConstraint('import_id', 'fingerprint'),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    import_id: Mapped[str] = mapped_column(ForeignKey('reporting_register_imports.id'), index=True)
+    fingerprint: Mapped[str] = mapped_column(String(64))
+    snapshot: Mapped[dict] = mapped_column(JSON)
+    evaluated_at: Mapped[int]
+
+
+class WorkflowPaymentDraft(Base):
+    __tablename__ = 'workflow_payment_drafts'
+    __table_args__ = (UniqueConstraint('actor_id','digest'),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    actor_id: Mapped[int] = mapped_column(ForeignKey('users.id'))
+    conversation_id: Mapped[str] = mapped_column(ForeignKey('conversations.id'))
+    project_id: Mapped[int] = mapped_column(ForeignKey('projects.id'))
+    digest: Mapped[str] = mapped_column(String(64))
+    snapshot: Mapped[dict] = mapped_column(JSON)
+    created_at: Mapped[str] = mapped_column(String(40))
+
+
+class WorkflowPaymentApproval(Base):
+    __tablename__ = 'workflow_payment_approvals'
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    draft_id: Mapped[str] = mapped_column(ForeignKey('workflow_payment_drafts.id'), unique=True)
+    digest: Mapped[str] = mapped_column(String(64))
+    actor_id: Mapped[int] = mapped_column(ForeignKey('users.id'))
+    approved_at: Mapped[int]
+
+
+class WorkflowCreditReservation(Base):
+    __tablename__ = 'workflow_credit_reservations'
+    credit_key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    draft_id: Mapped[str] = mapped_column(ForeignKey('workflow_payment_drafts.id'))
+
+
+class WorkflowPaymentExport(Base):
+    __tablename__ = 'workflow_payment_exports'
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    draft_id: Mapped[str] = mapped_column(ForeignKey('workflow_payment_drafts.id'), unique=True)
+    approval_id: Mapped[str] = mapped_column(ForeignKey('workflow_payment_approvals.id'))
+    sha256: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[int]

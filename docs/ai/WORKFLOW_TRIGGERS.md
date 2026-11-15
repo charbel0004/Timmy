@@ -1,6 +1,6 @@
 # Stored workflow triggers
 
-Version 2.0, 2026-11-14. Business wording confirmed by NK in the working session.
+Updated 2026-11-15. Business wording confirmed by NK in the working session.
 The live knowledge base is `backend/timmy/workflow_knowledge.json`; backend code
 owns capabilities and authorization. These instructions do not change policy.
 
@@ -25,10 +25,19 @@ Weekly order: check planning → check reports → select planned/reported times
 → validate/flag/invalidate via deterministic authorized services → resolve explicit
 policy cases or raise recommended human resolutions → prepare payment request →
 export approved request file. Every step has a status; blocked steps are not
-reported as done. The present implementation performs intake integrity and
-structural checks, records report cutoffs and exposes issues, but explicitly
-blocks missing authoritative/financial adapters. It does not yet push records
-into a production eligible-credit ledger.
+reported as done. The shared-chat Excel path now connects confirmed mappings,
+source-code contracts, planning registration, declared official register evidence,
+human planning/staff reviews, deterministic session/hour findings and immutable
+payment snapshots. Exact destination/allocation verification and exact-snapshot
+human approval precede file-only export. A combined processing/payment request
+selects the complete weekly goal. Every step's prerequisites, outcome and next
+action are exposed at `/api/workflows/definitions`.
+
+See [the Excel workflow contract](../excel-reporting-workflow.md) for the source
+trust boundary and supported execution path. Legacy project/scheduled runners
+retain their earlier adapters and explicit blockers. The catalog describes the
+shared-chat path; it does not upgrade a legacy schedule's financial authority.
+Finance-return reconciliation remains gated by an approved return-source contract.
 
 Return order: preserve trusted return → reconcile exact batch → map verified
 references → archive evidence → raise unmatched/partial/pending/duplicate items.

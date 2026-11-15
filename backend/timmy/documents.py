@@ -373,6 +373,9 @@ def project_report_cutoffs(db, project_id):
     ).order_by(ExternalReportVersion.id))
     result = {}
     for row in versions:
+        from .reporting_register import financial_register_blockers
+        if row.source.startswith('excel-register:') and financial_register_blockers(db,project_id,row.activity_code):
+            continue
         key = (project_id, code, row.activity_code)
         if key in result:
             raise HTTPException(409, "Conflicting frozen report evidence")
@@ -505,6 +508,17 @@ def review_evidence(validation_id: int, body: EvidenceDecision, request: Request
     audit(db, "evidence_review_recorded", principal.user.id, resource_type="evidence_review",
           resource_id=str(entry.id), outcome=body.decision)
     db.commit()
+    # A review is the human checkpoint; resume only as this same authorized
+    # actor, never by impersonating another conversation owner.
+    if 'projects:manage' in principal.permissions:
+        sources={sheet['file_id'] for sheet in event.snapshot.get('sheets',[])}
+        conversations=list(db.scalars(select(Conversation).join(DocumentImport,DocumentImport.conversation_id==Conversation.id)
+            .where(Conversation.owner_id==principal.user.id,DocumentImport.file_id.in_(sources)).distinct()))
+        from .global_mappings import resume_after_evidence
+        for conversation in conversations:
+            documents=resolve_documents(db,principal,conversation.id,None,[])
+            resume_after_evidence(db,principal,request.app.state.config,conversation,documents)
+        db.commit()
     return {"id": entry.id}
 
 

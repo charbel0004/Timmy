@@ -143,3 +143,28 @@ fallback), then validate with `nginx -t` before reloading Nginx. Hashed Vite ass
 may retain long cache lifetimes. A repository change to the deploy script alone
 cannot update the installed root-owned Nginx configuration. No cache-clearing
 response should remove authentication cookies or browser-stored user documents.
+
+
+### Reviewed Excel workflow transition (0019 → 0020)
+
+The candidate manifest pins only `0020_reporting_register.py`, an additive
+migration creating seven reporting/payment-evidence tables. The compatibility
+regression runs archived release `4f980420a64601dacd0c96144a6f8d37b2435ac8`
+against the expanded schema. CI also checks a populated upgrade and model drift.
+Use the existing blob-pinned migration gate after reviewing the candidate and
+successful CI; do not disable that gate to deploy a different migration tree.
+The verified deployer must find live revision 0019, verify its SQLite backup,
+apply 0020, and health-check both slots before switching. If live schema or
+migration history differs, stop and review a separate transition.
+
+No financial permission is granted automatically, including to administrators.
+Explicitly designate the approved Excel report source and its project scopes;
+assign `planning.verify`, `staff.verify`, `payments.allocate` and
+`payments.approve` only to the authorized humans. Existing uploads alone do not
+become report validation, human approval, or settlement. See
+[the Excel workflow contract](../../docs/excel-reporting-workflow.md).
+
+Rollback switches application code and keeps schema 0020 and its evidence.
+Never restore an old backup over live writes or downgrade evidence tables after
+recording approvals without an operator retention/reconciliation plan. This
+change has no external payment-delivery or bank-settlement adapter.
