@@ -167,7 +167,6 @@ export function Assistant({ conversation, append, canReadProjects, csrfToken, on
   const sending = useRef(false);
   const [error, setError] = useState("");
   const [projects, setProjects] = useState<Project[]>();
-  const [projectScope, setProjectScope] = useState<number>();
   const [projectError, setProjectError] = useState(false);
   const [model, setModel] = useState("Checking Ollama…");
   const messages = conversation?.messages ?? [];
@@ -219,10 +218,17 @@ export function Assistant({ conversation, append, canReadProjects, csrfToken, on
 
   function refreshAfterEvidence() {
     if (!conversation?.id) return;
-    api.conversation(conversation.id).then(updated=>{
-      const known=new Set(messages.map(m=>m.id));
-      append(conversation.id,...updated.messages.filter(m=>!known.has(m.id)));
-    }).catch(err=>setError(errorMessage(err)));
+    const id = conversation.id;
+    // Global receipts do not embed the column mapping proposal. Refresh the
+    // independently persisted file statuses as well as the conversation.
+    void Promise.all([api.conversation(id), api.documents(id), api.workflowState(id)])
+      .then(([updated, records, state]) => {
+        setDocuments(records);
+        setWorkflow(state);
+        const known = new Set(messages.map(message => message.id));
+        append(id, ...updated.messages.filter(message => !known.has(message.id)));
+      })
+      .catch(err => setError(errorMessage(err)));
   }
 
   function selectFiles(event: ChangeEvent<HTMLInputElement>) {
@@ -276,7 +282,7 @@ export function Assistant({ conversation, append, canReadProjects, csrfToken, on
       attempt.id = id;
       if (files.length) setSteps(["Uploading attachments for project mapping"]);
       for (const file of files) {
-        const record = await api.uploadDocument(projectScope, id, file, csrfToken);
+        const record = await api.uploadDocument(undefined, id, file, csrfToken);
         setDocuments((current) => [...current, record]);
         setFiles((current) => current.filter((item) => item !== file));
         append(id);
@@ -286,7 +292,7 @@ export function Assistant({ conversation, append, canReadProjects, csrfToken, on
       sent = true;
       polling = true;
       timer = setInterval(() => void refreshSteps(), 2000);
-      const reply = await api.sendMessage(id, message, csrfToken, attempt.requestId, projectScope);
+      const reply = await api.sendMessage(id, message, csrfToken, attempt.requestId);
       try {
         reply.message.activity = (await api.assistantActivity(id, attempt.requestId)).steps;
       } catch { /* The reply remains usable if the activity request fails. */ }
@@ -346,7 +352,7 @@ export function Assistant({ conversation, append, canReadProjects, csrfToken, on
       <WorkflowFindings conversation={conversation?.id} csrf={csrfToken} permissions={projectPermissions} revision={messages.length+documents.length} onResumed={refreshAfterEvidence} />
       <WorkflowPayments conversation={conversation?.id} csrf={csrfToken} permissions={projectPermissions} revision={messages.length+documents.length} onResumed={refreshAfterEvidence} />
       <form className="chat-composer" onSubmit={submit}>
-        <p className="muted"><Badge tone="cyan">Guarded operations</Badge> {projectScope ? "Attachments are limited to the selected project's conversation files." : "Timmy matches this conversation's source rows by approved project and activity codes; no project selection is needed."}</p>
+        <p className="muted"><Badge tone="cyan">Guarded operations</Badge> All active authorized projects are in context. Timmy matches this conversation's source rows by approved project and activity codes.</p>
         <label htmlFor="chat-input" className="sr-only">Message Agent Timmy</label>
         <textarea ref={textarea} id="chat-input" dir="auto" rows={2} placeholder="Message Agent Timmy…" maxLength={1500} value={draft}
           readOnly={busy} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => {
@@ -374,9 +380,8 @@ export function Assistant({ conversation, append, canReadProjects, csrfToken, on
         </div>}
         {documents.length > 0 && <ul className="attachment-list">{documents.map((document) =>
           <li key={document.id}><a href={documentDownload(document.id)} dir="auto">{document.filename}</a>
-            <small>{document.rows} rows · {workflow?.mapping?.status === "confirmed" && workflow.scope_fresh !== false
-              && workflow.mapping.sheets.some((sheet) => sheet.file_id === document.id)
-              ? "Column mapping confirmed" : "Mapping review required"}</small></li>)}</ul>}
+            <small>{document.rows} rows · {document.status === "MAPPING_CONFIRMED"
+              ? "Column mapping confirmed · evidence review separate" : "Column mapping review required"}</small></li>)}</ul>}
         {files.length > 0 && <ul className="attachment-list">{files.map((file, i) =>
           <li key={i}><span dir="auto">{file.name}</span>
             <button type="button" className="secondary" aria-label={`Remove ${file.name}`}
@@ -401,15 +406,14 @@ export function Assistant({ conversation, append, canReadProjects, csrfToken, on
     {open && <aside id="assistant-context" className="assistant-context glass-panel" aria-label="Conversation context">
       <h2>Conversation context</h2>
       {canReadProjects && <>
-        <h3><label htmlFor="chat-project">Project scope</label></h3>
-        {projects?.length ? <select id="chat-project" value={projectScope ?? ""} disabled={busy}
-          onChange={(event) => setProjectScope(event.target.value ? Number(event.target.value) : undefined)}>
-          <option value="">All authorized projects</option>
-          {projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
-        </select> :
-          <p role="status" className="muted">{projectError ? "Projects unavailable" :
-          projects ? "No assigned projects" : "Loading projects…"}</p>}
-        <p className="muted">All authorized projects uses source acronyms automatically. An optional project selection limits processing to its conversation attachments.</p>
+        <h3>Project context: all active authorized projects</h3>
+        {projects ? <ul className="project-list">{projects
+          .filter(project => project.status === "active" &&
+            projectPermissions[String(project.id)]?.includes("projects:read") &&
+            projectPermissions[String(project.id)]?.includes("timesheets.view"))
+          .map(project => <li key={project.id}>{project.name}</li>)}</ul> :
+          <p role="status" className="muted">{projectError ? "Projects unavailable" : "Loading authorized projects…"}</p>}
+        <p className="muted">No project selection is required. Source rows are matched within this conversation; unrelated conversations are not included.</p>
         <p role="status" className="muted">{model}</p>
       </>}
       <dl className="status-list">

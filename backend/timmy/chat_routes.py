@@ -223,29 +223,17 @@ async def answer(conversation_id, payload, request, principal, db, identifier, r
         r"\b(?:hourly|session|payment) rate\b|\bpayment polic(?:y|ies)\b", payload.message, re.I
     ))
     request_context = payload.model_dump(mode='json', exclude={'request_id'})
-    saved_scope = (conversation.workflow_state or {}).get('scope', {})
-    # A selected project limits this conversation to its own attachments, so an
-    # unrelated file from another conversation cannot block Process or mapping.
+    # The AI Workspace defaults to every active project the actor can access.
+    # Past single-project workflow state must never narrow a new global request.
+    # Document visibility remains limited to this owned conversation.
     selected_ids = payload.document_ids
     if payload.project_id is not None and not selected_ids:
         selected_ids = attached_sources(db, identifier, payload.project_id)
-    inherited_scope = payload.project_id is None and not selected_ids
-    # An existing single-project workflow must not shadow newly attached global
-    # documents or make a chat permanently tied to an older selected project.
-    current_documents = resolve_documents(db, principal, identifier, None, []) if inherited_scope else []
-    global_sources = any(f.project_id is None for f, _ in current_documents) or (
-        len({f.project_id for f, _ in current_documents}) > 1
-    )
-    effective_project = (saved_scope.get('project_id') if inherited_scope and not global_sources
-                         else payload.project_id)
-    effective_ids = (saved_scope.get('source_ids', []) if inherited_scope and not global_sources
-                     else selected_ids)
+    effective_project = payload.project_id
+    effective_ids = selected_ids
     documents = [] if policy_lookup else resolve_documents(db, principal, identifier, effective_project, effective_ids)
     source_ids = [file.id for file, _ in documents]
-    multi_project_documents = bool(documents) and (
-        any(file.project_id is None for file, _ in documents)
-        or len({file.project_id for file, _ in documents}) > 1
-    )
+    multi_project_documents = bool(documents) and payload.project_id is None
 
     def replay(turn: ChatTurn):
         if turn.prompt != payload.message or not turn.context or turn.context.get('request') != request_context:
@@ -341,7 +329,7 @@ async def answer(conversation_id, payload, request, principal, db, identifier, r
         actor = current_principal(request, db)
         active_conversation = owned(db, actor, conversation_id)
         available = resolve_documents(db, actor, identifier, payload.project_id, selected_ids)
-        if any(file.project_id is None for file, _ in available) or len({file.project_id for file, _ in available}) > 1:
+        if available and payload.project_id is None:
             record("Executing guarded global workflow with per-project receipts")
             return run_global_workflow(db, actor, config, active_conversation, available,
                                        workflow_id=workflow_id, request_id=request_id, on_step=record)

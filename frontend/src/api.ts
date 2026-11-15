@@ -10,7 +10,7 @@ export interface Session {
   demo_mode: boolean;
   must_change_password: boolean;
 }
-export interface Project { id: number; name: string }
+export interface Project { id: number; name: string; status?: string }
 export interface Settings { demo_mode: boolean; ollama_model: string; report_integration?: { status: string; missing: string[] } }
 
 export interface OllamaStatus {
@@ -77,7 +77,13 @@ export const api = {
   documents: (conversation?: string) => request<DocumentRecord[]>(conversation ? `/documents?conversation_id=${conversation}` : "/documents"),
   uploadDocument: (project: number | undefined, conversation: string, file: File, csrf: string) =>
     request<DocumentRecord>(`/documents?${new URLSearchParams({ ...(project === undefined ? {} : { project_id: String(project) }), conversation_id: conversation, filename: file.name })}`, {
-      method: "POST", headers: { "X-CSRF-Token": csrf, "Content-Type": file.type || "application/octet-stream" }, body: file,
+      method: "POST", headers: { "X-CSRF-Token": csrf,
+        // Browsers on Linux sometimes identify CSV files as text/plain;
+        // choose the server-supported media type from the validated extension.
+        "Content-Type": file.name.toLowerCase().endsWith(".csv") ? "text/csv"
+          : file.name.toLowerCase().endsWith(".xlsx")
+          ? "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+          : "application/octet-stream" }, body: file,
     }),
   session: () => request<Session>("/auth/session"),
   login: (username: string, password: string) => request<Session>("/auth/login", {

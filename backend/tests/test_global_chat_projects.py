@@ -90,3 +90,38 @@ def test_global_chat_upload_maps_both_projects_and_stops_financial_work(client, 
     response = client.get("/api/documents", params={"conversation_id":other})
     assert response.status_code == 200
     assert response.json() == []
+
+
+def test_all_active_projects_are_visible_in_an_unselected_chat_even_when_source_is_project_tagged(client, tmp_path):
+    """An older project-tagged upload must not force new unselected chat requests into legacy scope."""
+    client.app.state.config.document_root = tmp_path / "uploaded"
+    with Session(client.app.state.engine) as db, db.begin():
+        role = Role(name="admin")
+        db.add(role)
+        db.flush()
+        db.add(User(id=94, username="global-default-admin", role_id=role.id,
+                    password_hash=password_hasher.hash(PASSWORD)))
+        db.flush()
+        db.execute(update(projects).where(projects.c.id == 1)
+                   .values(name="Training Project", project_code="TCD", policy_family="session", status="active"))
+        db.execute(update(projects).where(projects.c.id == 2)
+                   .values(name="Field Support", project_code="FOS", policy_family="hours", status="active"))
+        for pid in (1, 2):
+            db.execute(insert(project_memberships).values(project_id=pid, user_id=94))
+    login = client.post("/api/auth/login", headers=ORIGIN,
+                        json={"username": "global-default-admin", "password": PASSWORD})
+    assert login.status_code == 200, login.text
+    headers = ORIGIN | {"X-CSRF-Token": login.json()["csrf_token"]}
+    cid = client.post("/api/chat/conversations", headers=headers).json()["id"]
+    csv = ("project_code,activity_code,approved_start_date,approved_end_date\\n"
+           "TCD,26-TCD-011,2026-11-01,2026-11-30\\n")
+    uploaded = client.post("/api/documents", params={"filename":"planning.csv","conversation_id":cid,"project_id":1},
+                           content=csv.encode(), headers=headers | {"Content-Type":"text/csv"})
+    assert uploaded.status_code == 201, uploaded.text
+    reply = client.post(f"/api/chat/conversations/{cid}/messages", headers=headers,
+                        json={"message":"Analyze these files","request_id":str(uuid4())})
+    assert reply.status_code == 200, reply.text
+    result = reply.json()["message"]["text"]
+    assert "Global spreadsheet intake" in result
+    assert "Training Project (TCD): 1" in result
+    assert "Field Support (FOS): 0" in result
