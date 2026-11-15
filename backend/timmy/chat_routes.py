@@ -22,7 +22,8 @@ from .workflows import run_workflow, render_run
 from .documents import project_report_cutoffs
 from .conversation_workflow import handle_message, public_state, confirm_mapping
 from .project_discovery import discover_projects, render_project_discovery
-from .global_workflow import run_global_workflow
+from .global_workflow import run_global_workflow, global_workflow_status
+from .conversation_workflow import STATUS, check_integrity
 from .workflows import choose_workflow
 from .failure_diagnostics import classify
 
@@ -262,6 +263,7 @@ async def answer(conversation_id, payload, request, principal, db, identifier, r
         if not documents:
             return "لا توجد ملفات متاحة في هذه المحادثة." if arabic else "No accessible spreadsheets were found in this conversation. Attach CSV or XLSX files to analyze."
         if multi_project_documents:
+            check_integrity(config, documents)
             record("Matched source projects across available project context")
             return render_project_discovery(discover_projects(db, actor, documents))
         import re
@@ -381,6 +383,10 @@ async def answer(conversation_id, payload, request, principal, db, identifier, r
             else:
                 reply = "This legacy project's payment policy type needs administrator review."
         record("Checked project payment policy configuration")
+    elif multi_project_documents and STATUS.search(payload.message):
+        check_integrity(config, documents)
+        reply = global_workflow_status(db, principal, conversation, documents)
+        record("Read recorded global project workflow status")
     elif multi_project_documents and choose_workflow(payload.message) in {'analyze_intake', 'process_activity', 'show_issues'}:
         selection = choose_workflow(payload.message)
         reply = run_global_workflow(db, principal, config, conversation, documents,
