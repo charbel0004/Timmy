@@ -380,7 +380,7 @@ def global_conversation_state(db, principal, conversation):
         return None
     items = [
         {"project_id": pid, "workflow_id": run.workflow_id, "run_id": run.id,
-         "status": run.status,
+         "status": run.status, "validation_id":run.snapshot.get("structural_validation_id"),
          "steps": [{"step": step["step"], "status": step["status"],
                     "issue_codes": step["issue_codes"]}
                    for step in run.snapshot["steps"]]}

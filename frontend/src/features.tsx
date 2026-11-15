@@ -156,11 +156,11 @@ const operationCopy = {
 
 export function DocumentHistory() {
   return <section className="glass-panel operation-panel">
-    <h2>Stored spreadsheets</h2>
+    <h2>Stored spreadsheets</h2><p className="muted">Each row is a stored upload. Repeated filenames can belong to different conversations or file versions; compare the original hash before treating them as duplicates. Mapping confirmation does not approve evidence or payments.</p>
     <ApiPanel load={api.documents} render={(documents) => documents.length ? <div className="chat-table" tabIndex={0} role="region" aria-label="Stored spreadsheets">
-      <table><thead><tr><th scope="col">File</th><th scope="col">Project ID</th><th scope="col">Source rows</th><th scope="col">Status</th></tr></thead>
+      <table><thead><tr><th scope="col">File</th><th scope="col">Project ID</th><th scope="col">Data rows</th><th scope="col">Status</th></tr></thead>
         <tbody>{documents.map((file) => <tr key={file.id}><td><a href={documentDownload(file.id)} dir="auto">{file.filename}</a></td>
-          <td>{file.project_id}</td><td>{file.rows}</td><td>Parsed · Mapping required</td></tr>)}</tbody></table>
+          <td>{file.project_id ?? 'Global source'}</td><td>{file.data_rows ?? file.rows}</td><td>{file.status === 'MAPPING_CONFIRMED' ? 'Column mapping confirmed · evidence approval separate' : 'Parsed · Column mapping review required'}{file.conversation_id && <p><a href={`#assistant/${file.conversation_id}`}>Open source conversation</a></p>}<small>Uploaded {file.uploaded_at || 'date unavailable'} · File {file.id}</small><details><summary>Original SHA-256</summary><code>{file.sha256}</code></details></td></tr>)}</tbody></table>
     </div> : <p className="empty-state">No spreadsheets are stored for your projects.</p>} />
     <a href="#assistant">Open AI Assistant to upload a spreadsheet</a>
   </section>;
@@ -242,7 +242,7 @@ function EvidenceHistory({ validation, item, session, project }: {
     );
     return () => { current = false; };
   }, [path]);
-  return <details>
+  return <details open>
     <summary>Evidence review</summary>
     <p className="muted">Reviews apply to this snapshot. Report authority and payment eligibility are checked separately.</p>
     {(["planning", "staff"] as const).map((kind) => {
@@ -253,6 +253,7 @@ function EvidenceHistory({ validation, item, session, project }: {
     <ul>{history.filter((row) => row.project_code === item.project_code && row.activity_code === item.activity_code).map((row) =>
       <li key={row.id}>{row.kind}: {row.decision} · {row.evidence_ref} · Reviewer #{row.actor_id}</li>)}</ul>
     {error && <p role="alert">{error}</p>}
+    {(['planning','staff'] as const).filter(kind=>!kinds.includes(kind)).map(kind=><p role="status" key={kind}>You can inspect this evidence, but recording {kind} decisions requires the project-scoped {kind}.verify permission. Ask an administrator to assign it to the authorized reviewer; admin status alone does not grant review authority.</p>)}
     {kinds.length > 0 && <form className="admin-grid" onSubmit={async (event) => {
       event.preventDefault();
       const form = event.currentTarget;
@@ -273,6 +274,15 @@ function EvidenceHistory({ validation, item, session, project }: {
       <div><button disabled={busy}>Record decision</button></div>
     </form>}
   </details>;
+}
+
+export function EvidenceReviewInbox({session}:{session:Session}) {
+ const [items,setItems]=useState<{name:string;id:number}[]>([]),[error,setError]=useState(''),[loading,setLoading]=useState(true);
+ useEffect(()=>{let active=true;api.projects().then(async projects=>{
+  const results=await Promise.all(projects.filter(project=>session.project_permissions?.[String(project.id)]?.includes('timesheets.view')).map(async project=>({name:project.name,validation:await request<Validation|null>(`/documents/structural-validation/${project.id}`)})));
+  if(active)setItems(results.filter(r=>r.validation).map(r=>({name:r.name,id:r.validation!.id})));
+ }).catch(e=>{if(active)setError(errorMessage(e));}).finally(()=>{if(active)setLoading(false);});return()=>{active=false;};},[]);
+ return <section><h2>Planning and staff evidence reviews</h2><p className="muted">Review the saved project evidence below. Each decision requires an authorized human and resumes the owner's existing workflow. No approval is inferred from an Excel label.</p>{loading&&<p role="status">Loading saved evidence…</p>}{error&&<p role="alert">{error}</p>}{!loading&&!items.length&&!error&&<p>No saved validations are available. Process your documents in AI Workspace first.</p>}{items.map(item=><section key={item.id}><h3>{item.name}</h3><StructuralReview session={session} validationId={String(item.id)}/></section>)}</section>;
 }
 
 export function StructuralReview({ session, validationId }: { session: Session; validationId?: string }) {
@@ -319,7 +329,7 @@ export function StructuralReview({ session, validationId }: { session: Session; 
       {saved.activities.map((item) => <article key={JSON.stringify([item.project_code, item.activity_code])}>
         <h3>{item.project_code} / {item.activity_code}</h3>
         <p>{item.structure}{item.policy_family === "hours" ? " · HOURS source checks" : ` · ${item.session_pairs}/6 session pairs · ${item.role_slots}/12 role slots`}</p>
-        <p>Planning: {item.planning} · Identity: {item.staff} · External report: {item.report}</p>
+        <p>Snapshot gates when calculated — Planning: {item.planning} · Identity: {item.staff} · External report: {item.report}. Current human decisions appear below.</p>
         <p>Eligibility: {item.eligibility} · Approval: {item.approval} · Settlement: {item.settlement}</p>
         {item.report_evidence && <p>Frozen cutoff: {item.report_evidence.cutoff} · Validated version: {item.report_evidence.version}</p>}
         <EvidenceHistory key={saved.id} validation={saved.id} item={item} session={session} project={String(saved.project_id)} />

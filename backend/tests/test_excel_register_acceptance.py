@@ -46,10 +46,14 @@ def load(coordinator,suite):
         files[path.name]=response.json()
     reply=c.post(f'/api/chat/conversations/{conv}/messages',headers=h,json={'message':'Process the documents and give me a final payment request.','request_id':str(uuid4())})
     assert reply.status_code==200,reply.text
+    assert all(item['status']=='PARSED_MAPPING_REQUIRED' for item in c.get('/api/documents',params={'conversation_id':conv}).json())
     mapping=c.get(f'/api/global-mappings/{conv}').json()
     confirmed=c.post(f'/api/global-mappings/{conv}/confirm',headers=h,json={'fingerprint':mapping['fingerprint'],
         'sheets':[{k:s[k] for k in ('file_id','sheet_index','kind','columns')} for s in mapping['sheets']]})
     assert confirmed.status_code==200,confirmed.text
+    imports=c.get('/api/documents',params={'conversation_id':conv}).json()
+    assert len(imports)==4 and all(item['status']=='MAPPING_CONFIRMED' for item in imports)
+    assert all(item['data_rows']<item['rows'] and item['conversation_id']==conv for item in imports)
     return files
 
 
@@ -70,6 +74,7 @@ def declare(coordinator):
 def review(coordinator):
     c,h,conv=coordinator
     state=c.get(f'/api/chat/conversations/{conv}/workflow').json()
+    assert all(run['validation_id'] for run in state['project_runs'])
     with Session(c.app.state.engine) as db:
         runs=list(db.scalars(select(WorkflowRun).where(WorkflowRun.actor_id==120).order_by(WorkflowRun.id.desc())))
         latest={}
@@ -86,9 +91,10 @@ def review(coordinator):
                 assert response.status_code==200,response.text
 
 
-def test_happy_path_reaches_exact_human_payment_approval_without_intermediate_process_commands(coordinator):
+@pytest.mark.parametrize('suite',['01_Happy_Path','04_November_Happy_Path'])
+def test_happy_path_reaches_exact_human_payment_approval_without_intermediate_process_commands(coordinator,suite):
     c,h,conv=coordinator
-    load(coordinator,'01_Happy_Path')
+    load(coordinator,suite)
     declaration=declare(coordinator)
     assert declaration['assurance']=='coordinator_declared_not_independently_authenticated'
     assert all(r['accepted'] for r in declaration['evaluation']['rows'])

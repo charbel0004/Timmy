@@ -12,7 +12,7 @@ import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { api, ApiError, errorMessage } from "./api";
 import type { Session } from "./api";
-import { WorkflowDefinitions, StructuralReview, LocalAI, Dashboard, DocumentHistory, Login, OperationsPage, SettingsPanel } from "./features";
+import { EvidenceReviewInbox, WorkflowDefinitions, StructuralReview, LocalAI, Dashboard, DocumentHistory, Login, OperationsPage, SettingsPanel } from "./features";
 import { Badge, Brand, Icon } from "./design";
 import { Assistant, ConversationHistory } from "./assistant";
 
@@ -196,8 +196,8 @@ function Workspace({ session, onExit, onSession }: { session: Session; onExit: (
             (visible(page) ? <Administration key={page} page={page} session={session} /> : <p role="alert">Permission denied.</p>)}
           {(page === "access" || page === "users" || page === "roles") &&
             (visible("access") ? <AccessManagement session={session} /> : <p role="alert">Permission denied.</p>)}
-          {page === "evidence" && visible(page) && <StructuralReview session={session} />}
-          {page === "imports" && visible(page) && <><DocumentHistory /><StructuralReview key={validationId ?? "project"} session={session} validationId={validationId} /></>}
+          {page === "evidence" && visible(page) && <EvidenceReviewInbox session={session} />}
+          {page === "imports" && visible(page) && <>{validationId ? <StructuralReview key={validationId} session={session} validationId={validationId} /> : <a className="hero-action" href="#evidence">Open planning and staff reviews →</a>}<DocumentHistory /></>}
           {(page === "imports" || page === "timesheets" || page === "discrepancies" || page === "batches") &&
             (canReadProjects ? <OperationsPage key={page} section={page} /> : <p role="alert">Permission denied.</p>)}
           {page === "security" && <PasswordScreen session={session} onDone={(value) => {

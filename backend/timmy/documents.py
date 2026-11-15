@@ -33,6 +33,9 @@ class DocumentView(BaseModel):
     rows: int
     status: str = "PARSED_MAPPING_REQUIRED"
     workflow_run_id: int | None = None
+    data_rows: int | None = None
+    conversation_id: str | None = None
+    uploaded_at: str | None = None
 
 
 @instrument("spreadsheet.ingest", "validation")
@@ -128,9 +131,22 @@ def conversation_owned(db, principal, identifier):
 def list_documents(principal: Authenticated, db: Database, conversation_id: UUID | None = None):
     identifier = str(conversation_id) if conversation_id else None
     conversation_owned(db, principal, identifier)
-    return [describe(file, record) for file, record in db.execute(
-        scoped_documents(db, principal, identifier).order_by(StoredFile.uploaded_at.desc()).limit(100)
-    )]
+    from .models import MappingProposal
+    mappings=list(db.scalars(select(MappingProposal).where(MappingProposal.actor_id==principal.user.id)
+                             .order_by(MappingProposal.id.desc())))
+    result=[]
+    for file,record in db.execute(scoped_documents(db,principal,identifier).order_by(StoredFile.uploaded_at.desc()).limit(100)):
+        item=describe(file,record)
+        latest={}
+        for mapping in mappings:
+            if mapping.conversation_id==record.conversation_id and any(sheet['file_id']==file.id for sheet in mapping.sheets):
+                latest.setdefault(mapping.project_id,mapping.status)
+        item.status=('MAPPING_CONFIRMED' if latest and all(v=='confirmed' for v in latest.values()) else 'PARSED_MAPPING_REQUIRED')
+        item.data_rows=sum(max(0,len(sheet['rows'])-1) for sheet in record.sheets)
+        item.conversation_id=record.conversation_id
+        item.uploaded_at=str(file.uploaded_at)
+        result.append(item)
+    return result
 
 
 MEDIA = {
