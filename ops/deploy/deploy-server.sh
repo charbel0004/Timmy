@@ -30,6 +30,18 @@ wait_health() {
   return 1
 }
 
+wait_public_release() {
+  local index=$1 attempt
+  for attempt in {1..30}; do
+    if curl -fsS --max-time 3 "$PUBLIC_ORIGIN/" | cmp -s - "$index" &&
+       health "$PUBLIC_ORIGIN"; then
+      return 0
+    fi
+    sleep 2
+  done
+  return 1
+}
+
 switch_link() {
   ln -sfn "$1" "$2.next"
   mv -Tf "$2.next" "$2"
@@ -128,6 +140,8 @@ release="$base/releases/$requested"
 stage=
 candidate_started=false
 route_changed=false
+active_web="$base/releases/$active_sha/frontend/dist"
+[[ -L $base/current ]] || active_web=$LEGACY_WEB
 route_backup=$(mktemp /etc/timmy/route.XXXXXXXX)
 cp "$NGINX_INCLUDE" "$route_backup"
 cleanup() {
@@ -138,7 +152,7 @@ cleanup() {
     if $route_changed; then
       if health "http://127.0.0.1:$active" && cp "$route_backup" "$NGINX_INCLUDE.next" &&
            mv -Tf "$NGINX_INCLUDE.next" "$NGINX_INCLUDE" && nginx -t && systemctl reload nginx &&
-           wait_health "$PUBLIC_ORIGIN"; then
+           wait_public_release "$active_web/index.html"; then
         echo "Restored traffic to $active_sha; candidate retained for draining" >&2
       else
         echo "Routing rollback failed; both backends retained for operator recovery" >&2
@@ -253,10 +267,9 @@ route_changed=true
 write_route "$release/frontend/dist" "$slot" "$requested"
 nginx -t
 systemctl reload nginx
-wait_health "$PUBLIC_ORIGIN" || die 'Public API health check failed'
+wait_public_release "$release/frontend/dist/index.html" || die 'Public frontend and API did not converge after Nginx reload'
 asset=$(grep -oE '/assets/[^" ]+\.js' "$release/frontend/dist/index.html" | head -1)
 [[ -n $asset ]] || die 'Candidate entry asset not found'
-curl -fsS --max-time 5 "$PUBLIC_ORIGIN/" | cmp - "$release/frontend/dist/index.html"
 curl -fsS --max-time 5 "$PUBLIC_ORIGIN$asset" -o /dev/null
 if [[ -L $base/current ]]; then switch_link "$(readlink "$base/current")" "$base/previous"; fi
 systemctl enable "$unit"
