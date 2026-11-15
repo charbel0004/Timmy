@@ -234,6 +234,12 @@ function EvidenceHistory({ validation, item, session, project }: {
   const [busy, setBusy] = useState(false);
   const kinds = (["planning", "staff"] as const).filter((kind) =>
     session.project_permissions?.[project]?.includes(`${kind}.verify`));
+  const currentDecision = (kind: "planning" | "staff") => history.find(
+    (row) => row.kind === kind && row.project_code === item.project_code &&
+      row.activity_code === item.activity_code,
+  )?.decision;
+  const outstanding = kinds.filter((kind) => currentDecision(kind) !== "confirmed");
+  const nextKind = outstanding[0] ?? kinds[0];
   useEffect(() => {
     let current = true;
     request<EvidenceReview[]>(path).then(
@@ -242,18 +248,21 @@ function EvidenceHistory({ validation, item, session, project }: {
     );
     return () => { current = false; };
   }, [path]);
-  return <details open>
-    <summary>Evidence review</summary>
-    <p className="muted">Reviews apply to this snapshot. Report authority and payment eligibility are checked separately.</p>
+  return <details open={history.length === 0 || outstanding.length > 0} key={`${validation}-${item.activity_code}-${outstanding.join(",")}`}>
+    <summary>Evidence review · {outstanding.length
+      ? `Action required: ${outstanding.map(kind => kind === "planning" ? "planning" : "staff identities").join(" and ")}`
+      : "Planning and staff reviews confirmed"}</summary>
+    <p className="muted">Decisions below are current for this saved snapshot. External report authority and payment approval remain separate.</p>
     {(["planning", "staff"] as const).map((kind) => {
       const latest = history.find((row) => row.kind === kind && row.project_code === item.project_code
         && row.activity_code === item.activity_code);
       return <p key={kind}>{kind === "planning" ? "Planning evidence" : "Staff evidence"}: {latest?.decision ?? "awaiting review"}</p>;
     })}
-    <ul>{history.filter((row) => row.project_code === item.project_code && row.activity_code === item.activity_code).map((row) =>
-      <li key={row.id}>{row.kind}: {row.decision} · {row.evidence_ref} · Reviewer #{row.actor_id}</li>)}</ul>
+    <details><summary>Past evidence decisions</summary><ul>{history.filter((row) => row.project_code === item.project_code && row.activity_code === item.activity_code).map((row) =>
+      <li key={row.id}>{row.kind}: {row.decision} · {row.evidence_ref} · Reviewer #{row.actor_id}</li>)}</ul></details>
     {error && <p role="alert">{error}</p>}
     {(['planning','staff'] as const).filter(kind=>!kinds.includes(kind)).map(kind=><p role="status" key={kind}>You can inspect this evidence, but recording {kind} decisions requires the project-scoped {kind}.verify permission. Ask an administrator to assign it to the authorized reviewer; admin status alone does not grant review authority.</p>)}
+    {kinds.length > 0 && outstanding.length === 0 && <p role="status">Both reviews are confirmed. No further evidence decision is required unless you need to correct a previous decision.</p>}
     {kinds.length > 0 && <form className="admin-grid" onSubmit={async (event) => {
       event.preventDefault();
       const form = event.currentTarget;
@@ -268,7 +277,7 @@ function EvidenceHistory({ validation, item, session, project }: {
       } catch (error) { setError(errorMessage(error)); }
       finally { setBusy(false); }
     }}>
-      <label>Evidence category<select name="kind">{kinds.map((kind) => <option key={kind}>{kind}</option>)}</select></label>
+      <label>Evidence category<select name="kind" key={nextKind} defaultValue={nextKind}>{kinds.map((kind) => <option key={kind} value={kind}>{kind === "planning" ? "Planning authority" : "Staff identity verification"}{currentDecision(kind) === "confirmed" ? " (already confirmed)" : " (action required)"}</option>)}</select></label>
       <label>Decision<select name="decision"><option value="confirmed">Confirm review</option><option value="rejected">Reject evidence</option></select></label>
       <label>Independent evidence reference<input name="evidence" required minLength={5} maxLength={500} /></label>
       <div><button disabled={busy}>Record decision</button></div>
@@ -329,11 +338,11 @@ export function StructuralReview({ session, validationId }: { session: Session; 
       {saved.activities.map((item) => <article key={JSON.stringify([item.project_code, item.activity_code])}>
         <h3>{item.project_code} / {item.activity_code}</h3>
         <p>{item.structure}{item.policy_family === "hours" ? " · HOURS source checks" : ` · ${item.session_pairs}/6 session pairs · ${item.role_slots}/12 role slots`}</p>
-        <p>Snapshot gates when calculated — Planning: {item.planning} · Identity: {item.staff} · External report: {item.report}. Current human decisions appear below.</p>
-        <p>Eligibility: {item.eligibility} · Approval: {item.approval} · Settlement: {item.settlement}</p>
+        <details><summary>Historical snapshot gate details</summary><p>At calculation: Planning {item.planning} · Identity {item.staff} · External report {item.report}. These are historical values, not live decisions.</p>
+        <p>At calculation: Eligibility {item.eligibility} · Approval {item.approval} · Settlement {item.settlement}.</p></details>
         {item.report_evidence && <p>Frozen cutoff: {item.report_evidence.cutoff} · Validated version: {item.report_evidence.version}</p>}
         <EvidenceHistory key={saved.id} validation={saved.id} item={item} session={session} project={String(saved.project_id)} />
-        <ul>{[...Object.keys(item.issues), ...item.review_tasks].map((code) => <li key={code}>{code}</li>)}</ul>
+        <details><summary>Snapshot issue codes (historical)</summary><ul>{[...Object.keys(item.issues), ...item.review_tasks].map((code) => <li key={code}>{code}</li>)}</ul></details>
       </article>)}</>}
   </section>;
 }
