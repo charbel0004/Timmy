@@ -9,10 +9,13 @@
     "preview": "vite preview --host localhost"
   },
   "dependencies": {
+    "@xyflow/react": "^12.12.1",
     "lucide-react": "^1.73.0",
+    "motion": "^14.14.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
-    "react-markdown": "^10.1.0"
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.1.0",

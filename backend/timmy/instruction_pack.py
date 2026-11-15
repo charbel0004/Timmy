@@ -1,4 +1,5 @@
 """Pinned, read-only loader for the approved action pack."""
+from .observability import reference
 import json
 from functools import lru_cache
 from hashlib import sha256
@@ -37,4 +38,6 @@ def action_instructions(action_id: str) -> str:
         raise ValueError("Unknown action ID")
     paths = [entries[action_id] if item == "actions/<selected-action>.md" else item
              for item in manifest["load_order"]]
+    for path in paths:
+        reference(path, 'retrieved', DIGEST)
     return "\n\n".join(files[PACK + path] for path in paths)

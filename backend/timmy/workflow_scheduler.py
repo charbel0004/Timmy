@@ -10,6 +10,7 @@ from fastapi import HTTPException
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
+from contextlib import nullcontext
 from .auth import principal_for
 from .models import Role, User, WorkflowRun
 from .audit import audit
@@ -48,7 +49,7 @@ def persist_failed_attempt(db, *, actor_id: int, project_id: int,
     db.commit()
 
 
-def run_due(engine, config, now=None):
+def run_due(engine, config, now=None, telemetry=None):
     if not config.weekly_enabled:
         return []
     local = (now or datetime.now(timezone.utc)).astimezone(ZoneInfo('Asia/Beirut'))
@@ -78,9 +79,11 @@ def run_due(engine, config, now=None):
                     WorkflowRun.actor_id == user.id, WorkflowRun.request_key == key))
                 if existing:
                     continue
-                run = run_workflow(db, principal, config, workflow_id='weekly_cycle',
-                                   project_id=project_id, request_key=key)
-                db.commit()
+                execution = telemetry.execution(user.id, 'weekly_cycle', [project_id], {str(project_id): principal.project_permissions.get(project_id, [])}) if telemetry else nullcontext()
+                with execution:
+                    run = run_workflow(db, principal, config, workflow_id='weekly_cycle',
+                                       project_id=project_id, request_key=key)
+                    db.commit()
                 recorded.append(run.id)
             except HTTPException as error:
                 db.rollback()
@@ -99,10 +102,10 @@ def run_due(engine, config, now=None):
     return recorded
 
 
-async def scheduler_loop(engine, config):
+async def scheduler_loop(engine, config, telemetry=None):
     while True:
         try:
-            await asyncio.to_thread(run_due, engine, config)
+            await asyncio.to_thread(run_due, engine, config, None, telemetry)
         except Exception as error:
             # Without durable DB receipts, retrying on the next poll is unsafe.
             # Halt this scheduler process until operator inspection/restart.

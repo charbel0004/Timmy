@@ -1,3 +1,4 @@
+from .observability import instrument, current, span
 import re
 from .session_preview import preview as session_preview
 from .documents import resolve_documents, spreadsheet_profile
@@ -50,7 +51,8 @@ def owned(db: Database, principal: Authenticated, conversation_id: UUID) -> Conv
 def view(turn: ChatTurn):
     timestamp = datetime.fromtimestamp(turn.created_at, timezone.utc).isoformat()
     return [
-        {"id": f"{turn.id}-{role}", "text": value, "role": role, "timestamp": timestamp}
+        {"id": f"{turn.id}-{role}", "text": value, "role": role, "timestamp": timestamp,
+         **({"requestId": turn.request_id, "executionId": (turn.context or {}).get("execution_id")} if role == "assistant" else {})}
         for role, value in (("user", turn.prompt), ("assistant", turn.reply))
     ]
 
@@ -196,6 +198,7 @@ async def send(conversation_id: UUID, payload: SendMessage, request: Request, pr
     return result
 
 
+@instrument("agent.orchestrate", "orchestrator")
 async def answer(conversation_id, payload, request, principal, db, identifier, record):
     conversation = owned(db, principal, conversation_id)
     owner = principal.user.id
@@ -250,6 +253,7 @@ async def answer(conversation_id, payload, request, principal, db, identifier, r
 
     document_used = False
 
+    @instrument("documents.inspect", "internal_tool")
     def document_summary():
         nonlocal document_used
         document_used = True
@@ -311,6 +315,7 @@ async def answer(conversation_id, payload, request, principal, db, identifier, r
         return "\n".join(lines)
 
 
+    @instrument("workflow.execute", "internal_tool")
     def execute_workflow(workflow_id):
         db.rollback()
         db.execute(text('BEGIN IMMEDIATE'))
@@ -432,13 +437,14 @@ async def answer(conversation_id, payload, request, principal, db, identifier, r
         source_ids = current_scope.get('source_ids', source_ids)
     turn = ChatTurn(conversation_id=identifier, request_id=request_id, prompt=payload.message,
                     reply=("Scoped DEMO lookup requested." if demo_lookup else "Spreadsheet inspection requested.") if document_used else reply, created_at=int(time()),
-                    context={"request": request_context, "source_ids": source_ids, "payment_policy_lookup": policy_lookup})
+                    context={"request": request_context, "source_ids": source_ids, "payment_policy_lookup": policy_lookup, "execution_id": current.get().info["id"] if current.get() else None})
     record("Saving conversation response")
     db.add(turn)
     if used_tool:
         audit(db, "chat_tool_list_projects", owner)
     try:
-        db.commit()
+        with span("conversation.commit", "database"):
+            db.commit()
     except IntegrityError:
         db.rollback()
         if previous := db.scalar(query):

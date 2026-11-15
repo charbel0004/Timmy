@@ -79,8 +79,10 @@ steps and request ID. The same ID appears in the local diagnostic log at
 `logs/assistant.log` in the project folder.
 The log rotates at 1 MB and keeps three backups. It records timings, action
 names and failure codes without storing prompts, replies or spreadsheet data.
-Activity on individual replies is available in the current view; reloading
-chat history does not restore the activity trail.
+The legacy string trail remains available in the current view. New replies also
+link to persisted execution history; the Execution Observatory restores linked
+operations, model usage, provenance, resource samples and replay after refresh.
+See [observability rollout and limitations](docs/observability/implementation.md).
 
 
 ## Conversation confirmation

@@ -1,3 +1,4 @@
+import { ExecutionSummary } from "./observatory";
 import { useEffect, useState, useCallback } from "react";
 import type { FormEvent, ReactNode } from "react";
 import { request, api, documentDownload, errorMessage } from "./api";
@@ -18,7 +19,7 @@ function ApiPanel<T>({ load, render }: { load: () => Promise<T>; render: (value:
     );
     return () => { active = false; };
   }, [load, attempt]);
-  if (state.status === "loading") return <p role="status">Loading…</p>;
+  if (state.status === "loading") return <div className="skeleton" role="status">Loading workspace data…</div>;
   if (state.status === "error") return <>
     <p role="alert">{state.message}</p>
     <button onClick={() => { setState({ status: "loading" }); setAttempt(attempt + 1); }}>Retry</button>
@@ -58,18 +59,11 @@ export function Login({ onLogin }: { onLogin: (session: Session) => void }) {
   </main>;
 }
 
-const metrics: { label: string; icon: IconName; note: string }[] = [
-  { label: "Total Timesheets", icon: "imports", note: "Imports planned" },
-  { label: "Validated Records", icon: "validation", note: "Validation planned" },
-  { label: "Pending Discrepancies", icon: "discrepancies", note: "Review queue planned" },
-  { label: "Calculated Payments", icon: "calculation", note: "Calculation planned" },
-  { label: "Awaiting Approval", icon: "approval", note: "Approvals planned" },
-];
 
 const steps: { label: string; icon: IconName; detail: string; status: string }[] = [
-  { label: "Upload timesheets", icon: "imports", detail: "Import Arabic and English Excel or CSV files.", status: "Planned" },
+  { label: "Upload timesheets", icon: "imports", detail: "Import Arabic and English Excel or CSV files. Original values and source bytes are preserved.", status: "Available" },
   { label: "AI extraction", icon: "ai", detail: "Ollama proposes structured values from the original cells.", status: "Adapter available" },
-  { label: "Validation", icon: "validation", detail: "Python verifies source provenance, dates, and quantities.", status: "Extraction checks available" },
+  { label: "Validation", icon: "validation", detail: "Python verifies source provenance, dates, and quantities.", status: "Guarded structural checks" },
   { label: "Payment calculation", icon: "calculation", detail: "Deterministic Python rules calculate eligible amounts.", status: "Planned" },
   { label: "Human approval", icon: "approval", detail: "An authorized reviewer approves the batch.", status: "Planned" },
   { label: "Export", icon: "export", detail: "Export approved lists for external payment execution.", status: "Planned" },
@@ -81,12 +75,15 @@ const aiLabels = {
   unreachable: "Ollama unavailable",
 } as const;
 
-function LocalAI() {
-  return <div aria-label="Ollama connection">
-    <ApiPanel load={api.aiStatus} render={({ status, model }) =>
-      <div className="ai-state"><Badge tone={status === "ready" ? "green" : "amber"}>
+const checkAIStatus = async () => ({ ...await api.aiStatus(), checkedAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) });
+export function LocalAI() {
+  const [revision, setRevision] = useState(0);
+  return <div aria-label="Ollama connection" className="ai-connection-check">
+    <ApiPanel key={revision} load={checkAIStatus} render={({ status, model, checkedAt }) =>
+      <div className="ai-state" title={`Checked ${checkedAt}`}><Badge tone={status === "ready" ? "green" : "amber"}>
         <span className="status-dot" aria-hidden="true" /> {aiLabels[status]}
-      </Badge><span className="model-tag" data-mono dir="auto">{model}</span></div>} />
+      </Badge><span className="model-tag" data-mono dir="auto">{model}</span><small>Checked {checkedAt}</small></div>} />
+    <button className="secondary" aria-label="Refresh Ollama status" onClick={() => setRevision(value => value + 1)}>↻</button>
   </div>;
 }
 
@@ -114,47 +111,41 @@ function ProjectList() {
 
 export function Dashboard() {
   return <div className="dashboard">
-    <section className="hero glass-panel">
-      <div>
-        <p className="hero-label"><Icon name="clock" /> Reporting period unavailable</p>
-        <h1>Staff Operations</h1>
-        <p>AI-powered timesheet validation &amp; payment management</p>
-      </div>
-      <div className="hero-controls">
-        <LocalAI />
-        <a href="#imports" className="hero-action"><Icon name="imports" /> View imports</a>
-      </div>
+    <section className="hero glass-panel"><div><p className="eyebrow">Operations command center</p>
+      <h1>A clearer view of your operations.</h1><p>Review source evidence, resolve exceptions, and prepare the next decision.</p></div>
+      <div className="hero-controls"><LocalAI /><a href="#assistant" className="hero-action"><Icon name="ai" /> Open AI Workspace</a></div>
     </section>
-    <section aria-labelledby="metrics-title">
-      <h2 id="metrics-title" className="mb-3">Processing overview</h2>
-      <dl className="metrics">{metrics.map(({ label, icon, note }) =>
-        <div className={`glass-panel metric metric--${icon}`} key={label}>
-          <span className="tile-icon"><Icon name={icon} /></span>
-          <dt>{label}</dt><dd data-mono><span aria-hidden="true">—</span><span className="sr-only">Unavailable</span></dd>
-          <p>{note}</p>
-        </div>)}</dl>
-    </section>
-    <section className="glass-panel operation-panel">
-      <h2>Spreadsheet intake</h2>
-      <ApiPanel load={api.documentMetrics} render={(metrics) => <dl className="status-list">
-        <div><dt><a href="#imports">Stored spreadsheets</a></dt><dd>{metrics.documents}</dd></div>
-        <div><dt>Source rows awaiting mapping</dt><dd>{metrics.source_rows}</dd></div>
-      </dl>} />
-    </section>
-    <ProcessingPipeline />
-    <div className="dashboard-bottom">
-      <section className="glass-panel"><h2>Assigned projects</h2><ProjectList /></section>
-      <section className="glass-panel"><h2>Operational insights</h2>
-        <dl className="status-list">
-          <div><dt>Validation and activity charts</dt><dd>No reporting API</dd></div>
-          <div><dt>Payment batch overview</dt><dd>Planned</dd></div>
-          <div><dt>Recent imports and discrepancies</dt><dd>Planned</dd></div>
-          <div><dt>Records requiring AJ’s attention</dt><dd>Review queue planned</dd></div>
-        </dl>
+    <ApiPanel load={loadOverview} render={(data) => <>
+      <dl className="command-metrics">{[
+        ["Active projects", data.active_projects, "projects?status=active", "Currently active in your scope"],
+        ["Current activities", data.current_activities, "activities", "Within recorded planned dates"],
+        ["Mapping reviews", data.mapping_reviews, "assistant", "Your proposals awaiting confirmation"],
+        ["Source documents", data.documents, "imports", "Stored in authorized projects"],
+        ["Structural validations", data.structural_validations, "imports", "Your recorded validation snapshots"],
+        ["Payment-ready obligations", data.payment_ready, "batches", "Entitlement summary unavailable"],
+        ["Outstanding obligations", data.outstanding_obligations, "reconciliation", "Settlement summary unavailable"],
+      ].map(([label, value, link, note]) => <a className="glass-panel command-metric" href={`#${link}`} key={String(label)}><dt>{label}</dt>
+        <dd data-mono>{value === null ? "Unavailable" : value}</dd><small>{note}</small><span aria-hidden="true">↗</span></a>)}</dl>
+      <section className="glass-panel workflow-report"><header><h2>Workflow outcomes</h2><span className="muted">Your stored receipts · last 7 UTC days</span></header>
+        <div className="workflow-outcome-chart">{data.workflow_trend.map(day => <div key={day.day}><small>{day.day.slice(5)}</small><div role="img" aria-label={`${day.day}: ${day.completed} completed, ${day.needs_review} need review, ${day.blocked} blocked, ${day.failed} failed`}>
+          {(['completed', 'needs_review', 'blocked', 'failed'] as const).map(status => <span className={`outcome-${status}`} key={status} style={{ width: `${day[status] / Math.max(1, ...data.workflow_trend.map(item => item.completed + item.needs_review + item.blocked + item.failed)) * 100}%` }} />)}</div><span>{day.completed} complete · {day.needs_review} review · {day.blocked} blocked · {day.failed} failed</span></div>)}</div>
+        <p className="muted">Workflow completion does not confer approval, eligibility or settlement.</p>
       </section>
-    </div>
+      {!!data.pending_reviews.length && <section className="glass-panel operation-panel"><h2>Mappings awaiting your review</h2><ul>{data.pending_reviews.map((review, index) => <li key={`${review.conversation_id}-${index}`}><a className="pending-review-link" href={`#assistant/${review.conversation_id}`}>{review.title || 'Open source mapping review'} ↗</a></li>)}</ul></section>}
+    </>} />
+    <ExecutionSummary />
+    <div className="dashboard-bottom"><section className="glass-panel"><h2>Assigned projects</h2><ProjectList /></section>
+      <section className="glass-panel"><span className="eyebrow">Human control</span><h2>Your next decision</h2>
+        <p className="muted">Confirm source mappings, review validation evidence, and resolve blockers before preparing payments.</p>
+        <a className="hero-action" href="#imports">Review source evidence →</a>
+        <p className="muted">Timmy prepares. Authorized humans approve. Transfers and settlement occur externally.</p></section></div>
+    <ProcessingPipeline />
   </div>;
 }
+const loadOverview = () => request<{ active_projects: number; current_activities: number; mapping_reviews: number;
+  workflow_trend: { day: string; completed: number; needs_review: number; blocked: number; failed: number }[];
+  pending_reviews: { conversation_id: string; title: string | null; created_at: number }[];
+  documents: number; structural_validations: number; payment_ready: null; outstanding_obligations: null }>("/overview");
 
 const operationCopy = {
   imports: ["Source file", "No imports recorded for your projects.", "This table lists legacy import records. New spreadsheet uploads are shown above."],
@@ -215,9 +206,13 @@ export function SettingsPanel() {
         </dd></div>}
       </dl>} />
     </section>
+    <section className="glass-panel"><h2>Approved instruction metadata</h2><ApiPanel load={instructionMetadata} render={(data) => <dl className="status-list">
+      <div><dt>Instruction set</dt><dd>{data.instruction_set}</dd></div><div><dt>Pinned version</dt><dd className="trace-id">{data.version}</dd></div>
+      <div><dt>Configuration</dt><dd>{data.configuration_version}</dd></div></dl>} /><p className="muted">Confidential instruction text is excluded. Invocation nodes show the fingerprint of the context actually supplied.</p></section>
     <section className="glass-panel"><h2>Assigned projects</h2><ProjectList /></section>
   </div>;
 }
+const instructionMetadata = () => request<{ instruction_set: string; version: string; configuration_version: string }>("/executions/instructions");
 
 
 type Validation = { id: number; project_id: number; activities: Array<{

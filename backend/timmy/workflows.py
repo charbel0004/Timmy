@@ -3,6 +3,8 @@
 A workflow is a server-owned ordered procedure. The model chooses its ID, never
 supplies code, permissions or financial authority. Unimplemented adapters block.
 """
+from .observability import instrument
+
 import json
 import re
 from datetime import datetime, timezone
@@ -87,6 +89,7 @@ def step_result(step, status, issues=(), **data):
                 attempted=True, executed=status == 'completed', **data)
 
 
+@instrument("workflow.run", "internal_tool")
 def run_workflow(db, principal, config, *, workflow_id, project_id, request_key,
                  conversation_id=None, document_ids=(), prepared_documents=None, mapping_ref=None,
                  structural_snapshot=None, payment_return_file_id=None):

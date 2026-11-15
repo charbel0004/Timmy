@@ -10,3 +10,5 @@ defusedxml>=0.7,<1
 
 langgraph>=1,<2
 PyYAML==6.0.3
+
+psutil>=6,<8

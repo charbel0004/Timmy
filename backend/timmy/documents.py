@@ -1,4 +1,6 @@
 """Private spreadsheet intake and coordinator-global, permission-checked reads."""
+from .observability import instrument, reference, span
+
 import csv
 from datetime import datetime, timezone
 from hashlib import sha256
@@ -33,6 +35,7 @@ class DocumentView(BaseModel):
     workflow_run_id: int | None = None
 
 
+@instrument("spreadsheet.ingest", "validation")
 def parse(data: bytes, extension: str):
     def sheet(name, source):
         rows = []
@@ -234,7 +237,8 @@ async def upload(request: Request, principal: Authenticated, db: Database, filen
                 request_key=f'payment_return:upload:{file_id}',
                 payment_return_file_id=file_id,
             )
-        db.commit()
+        with span("document.commit", "database"):
+            db.commit()
     except Exception:
         db.rollback()
         path.unlink(missing_ok=True)
@@ -296,6 +300,7 @@ HEADER_ALIASES = {
 }
 
 
+@instrument("spreadsheet.profile", "validation")
 def spreadsheet_profile(record):
     summaries = []
     for index, sheet in enumerate(record.sheets, 1):
@@ -319,6 +324,7 @@ def spreadsheet_profile(record):
     return summaries
 
 
+@instrument("documents.retrieve", "context")
 def resolve_documents(db, principal, conversation_id, project_id=None, document_ids=()):
     """Resolve without traversing another user's private conversation."""
     visible = scoped_documents(db, principal)
@@ -332,6 +338,8 @@ def resolve_documents(db, principal, conversation_id, project_id=None, document_
     if ids:
         if len(ids) > 20:
             raise HTTPException(422, "Select at most 20 spreadsheets")
+        for file, _ in explicit:
+            reference(file.id, 'retrieved', file.sha256, category='context')
         return sorted(explicit, key=lambda row: row[0].id)
     automatic = visible.where(
         DocumentImport.conversation_id == conversation_id
@@ -348,6 +356,8 @@ def resolve_documents(db, principal, conversation_id, project_id=None, document_
         combined.setdefault(file.id, (file, record))
     if len(combined) > 20:
         raise HTTPException(422, "More than 20 spreadsheets are in scope. Narrow the project or conversation.")
+    for file, _ in combined.values():
+        reference(file.id, 'retrieved', file.sha256, category='context')
     return list(combined.values())
 
 

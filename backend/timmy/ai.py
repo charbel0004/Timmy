@@ -4,6 +4,8 @@ from typing import Literal, TypeVar
 import httpx
 from pydantic import BaseModel, ValidationError
 
+from .observability import instrument, model_usage, reference, current, parent
+from hashlib import sha256
 from .config import Settings, settings
 from .extraction_validation import review_issues
 from .prompts import EXTRACTION_SYSTEM_PROMPT
@@ -44,7 +46,20 @@ class OllamaAdapter:
         )
 
 
+    @instrument("ollama.chat", "model")
     async def structured(self, messages: list[dict[str, str]], schema: type[Model]) -> Model:
+        trace = current.get()
+        if trace:
+            trace.emit('model.config', parent.get(), category='model', model=self.config.ollama_model, schema=schema.__name__, instruction_set='application-system-context')
+        tool_schema = schema.model_json_schema().get('properties', {}).get('tool', {})
+        for option in tool_schema.get('anyOf', [tool_schema]):
+            for tool in option.get('enum', []):
+                if isinstance(tool, str):
+                    reference('tool-schema:' + tool, 'supplied', sha256(json.dumps(tool_schema, sort_keys=True).encode()).hexdigest())
+        reference('application-system-context', 'supplied', sha256(
+            '\n'.join(m['content'] for m in messages if m['role'] == 'system').encode()).hexdigest())
+        reference('response-schema:' + schema.__name__, 'supplied',
+                  sha256(json.dumps(schema.model_json_schema(), sort_keys=True).encode()).hexdigest())
         try:
             response = await self.client.post(
                 f"{self.config.ollama_url}/api/chat",
@@ -77,6 +92,7 @@ class OllamaAdapter:
             raise OllamaExtractionError("malformed_json") from None
         if not isinstance(body, dict):
             raise OllamaExtractionError("invalid_response")
+        model_usage(body, self.config.ollama_model)
         if body.get("done_reason") == "length" or body.get("done") is False:
             raise OllamaExtractionError("truncated_output")
         message = body.get("message")

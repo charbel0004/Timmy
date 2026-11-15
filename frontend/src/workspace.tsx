@@ -62,6 +62,7 @@ const transitionOptions: Record<string, string[]> = {
 export function Administration({ page, session }: {
   page: "projects" | "activities"; session: Session;
 }) {
+  const [scopeFilter, setScopeFilter] = useState(() => new URLSearchParams(window.location.hash.split("?")[1] || "").get("status") || "all");
   const [projects, setProjects] = useState<Project[]>([]);
   const [activities, setActivities] = useState<Activity[]>([]);
   const [error, setError] = useState("");
@@ -107,6 +108,7 @@ export function Administration({ page, session }: {
     {page === "projects" && <>
       <div className="iam-heading"><p className="muted">Manage project access and lifecycle.</p>
         {canManage && <button disabled={busy} onClick={() => { setError(""); setNotice(""); setCreating(true); }}>New project</button>}</div>
+      <label className="operation-filter">Project status<select value={scopeFilter} onChange={(event) => setScopeFilter(event.target.value)}>{['all', 'active', 'draft', 'completed', 'archived'].map(status => <option key={status}>{status}</option>)}</select></label>
       {notice && <p role="status">{notice}</p>}
       {creating && <Dialog title="New project" close={() => { if (!busy) setCreating(false); }}>
         <form className="admin-form" onSubmit={(event) => submit(event, (fields) =>
@@ -126,7 +128,7 @@ export function Administration({ page, session }: {
         </form>
       </Dialog>}
       {!busy && !error && !projects.length && <p>No projects available.</p>}
-      {projects.map((project) => <article key={project.id} className="glass-panel admin-form">
+      {projects.filter(project => scopeFilter === "all" || project.status === scopeFilter).map((project) => <article key={project.id} className="glass-panel admin-form">
         <h2 dir="auto">{project.name}</h2><p>{project.project_code ?? "Code unassigned"} · {project.status} · {project.policy_family === "session" ? "Session-based" : project.policy_family === "hours" ? "Hours-based (policy pending approval)" : "Legacy project: policy type unassigned"}</p>
         {canManage && project.status !== "archived" && <details><summary>Edit project</summary>
           <form className="admin-grid" onSubmit={(event) => submit(event, (f) =>

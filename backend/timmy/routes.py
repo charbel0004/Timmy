@@ -30,10 +30,13 @@ def live():
 
 
 @router.get("/health")
-def health(db: Database):
+def health(request: Request, db: Database):
     try:
         db.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
         db.execute(text("SELECT policy_family FROM projects LIMIT 0"))
+        if request.app.state.config.telemetry_enabled:
+            db.execute(text("SELECT heartbeat_at FROM execution_runs LIMIT 0"))
+            db.execute(text("SELECT payload FROM execution_events LIMIT 0"))
     except SQLAlchemyError:
         raise HTTPException(503, "Database unavailable or migrations pending") from None
     return {"status": "ok"}

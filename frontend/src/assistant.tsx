@@ -1,3 +1,5 @@
+import { ExecutionTimeline } from "./observatory";
+import remarkGfm from "remark-gfm";
 import { Dictation, SpokenResponse } from "./voice";
 import { useEffect, useRef, useState } from "react";
 import type { ChangeEvent, FormEvent } from "react";
@@ -6,7 +8,7 @@ import Markdown from "react-markdown";
 import { api, documentDownload, errorMessage } from "./api";
 import type { DocumentRecord, Project, ConversationWorkflow } from "./api";
 import type { ChatMessage, Conversation } from "./chat";
-import { Badge } from "./design";
+import { AgentAvatar, Badge } from "./design";
 
 const suggestions = [
   { label: "Analyze timesheets", text: "Analyze this week’s timesheets.", Icon: FileSpreadsheet },
@@ -60,14 +62,15 @@ function ActivitySteps({ steps, requestId, live = false }: {
 function Message({ message, csrf }: { message: ChatMessage; csrf?: string }) {
   const [copyStatus, setCopyStatus] = useState("");
   return <article className={`chat-message chat-message--${message.role}`}>
-    <header>{message.role === "assistant" && <Sparkles className="message-avatar" size={18} aria-hidden="true" />}<strong>{message.role === "user" ? "You" : "Agent Timmy"}</strong>
+    <header>{message.role === "assistant" && <AgentAvatar className="message-avatar" size={32} />}<strong>{message.role === "user" ? "You" : "Agent Timmy"}</strong>
       <time dateTime={message.timestamp}>{new Date(message.timestamp).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</time>
     </header>
     <div dir="auto" className="message-body">
-      {message.role === "assistant" ? <Markdown skipHtml>{message.text}</Markdown> : <p>{message.text}</p>}
+      {message.role === "assistant" ? <Markdown skipHtml remarkPlugins={[remarkGfm]}>{message.text}</Markdown> : <p>{message.text}</p>}
     </div>
     {!!message.attachments?.length && <ul className="attachment-list">{message.attachments.map((name, i) =>
       <li key={i} dir="auto">{name}</li>)}</ul>}
+    {message.executionId && <a className="message-execution-link" href={`#observatory/${message.executionId}`}>Inspect recorded execution ↗</a>}
     {!!message.activity?.length && <ActivitySteps steps={message.activity} requestId={message.requestId} />}
     {message.tables?.map((table, index) => <details key={index}>
       <summary>{table.title}</summary>
@@ -256,7 +259,7 @@ export function Assistant({ conversation, append, canReadProjects, csrfToken, on
       setSteps(["Sending your message"]);
       sent = true;
       polling = true;
-      timer = setInterval(() => void refreshSteps(), 600);
+      timer = setInterval(() => void refreshSteps(), 2000);
       const reply = await api.sendMessage(id, message, csrfToken, attempt.requestId);
       try {
         reply.message.activity = (await api.assistantActivity(id, attempt.requestId)).steps;
@@ -286,13 +289,13 @@ export function Assistant({ conversation, append, canReadProjects, csrfToken, on
 
   return <div className={`assistant-layout${open ? " assistant-layout--context" : ""}`}>
     <section className="assistant-chat glass-panel" aria-label="AI Assistant">
-      <header className="assistant-toolbar"><h1>AI Assistant</h1>
+      <header className="assistant-toolbar"><h1>AI Workspace</h1>
         <button type="button" className="secondary" aria-expanded={open} aria-controls="assistant-context"
           onClick={() => setOpen(!open)}><PanelRight size={16} /> Context</button>
       </header>
       <div className="assistant-transcript" aria-live="polite">
         {messages.length === 0 && !submitted ? <div className="assistant-welcome">
-          <span className="assistant-mark"><Sparkles size={29} aria-hidden="true" /></span>
+          <span className="assistant-mark"><AgentAvatar size={76} /></span>
           <h2>How can I help you today?</h2>
           <p>Explore timesheets, staff activities, and payment preparation.</p>
           <div className="suggestions">{suggestions.map(({ label, text, Icon }) =>
@@ -301,6 +304,7 @@ export function Assistant({ conversation, append, canReadProjects, csrfToken, on
             }}><Icon size={18} aria-hidden="true" />{label}</button>)}</div>
         </div> : messages.map((message) => <Message key={message.id} message={message} csrf={csrfToken} />)}
         {submitted && <Message message={submitted} />}
+        <ExecutionTimeline conversation={conversation?.id ?? pending.current?.id} busy={busy} />
         {(activity || failedRequest) && <ActivitySteps steps={steps} requestId={failedRequest} live />}
       </div>
       {workflow?.mapping?.status === "proposed" && conversation?.id && <MappingReview key={workflow.mapping.id}
