@@ -22,6 +22,7 @@ def test_global_chat_upload_maps_both_projects_and_stops_financial_work(client, 
         db.flush()
         db.add(User(id=93, username="global-timmy-admin", role_id=role.id,
                     password_hash=password_hasher.hash(PASSWORD)))
+        db.flush()  # The membership FK must reference a persisted synthetic user.
         db.execute(update(projects).where(projects.c.id == 1)
                    .values(name="Training Project", project_code="TCD", policy_family="session"))
         db.execute(update(projects).where(projects.c.id == 2)
