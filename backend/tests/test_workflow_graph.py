@@ -50,3 +50,32 @@ def test_exception_is_safe_and_not_retried():
 def test_invalid_steps_rejected():
     with pytest.raises(ValueError):
         execute_graph(['same','same'],lambda step:result(step,'completed'))
+
+
+def test_independent_evidence_steps_run_after_review_but_cannot_release_dependent_finance():
+    visited=[]
+    statuses={'planning':'needs_review','reports':'completed','staff':'needs_review',
+              'validate':'completed','payment':'completed'}
+    output=execute_graph(['planning','reports','staff','validate','payment'],
+                         lambda step: visited.append(step) or result(step,statuses[step]),
+                         independent_steps=('reports','staff'))
+    assert visited == ['planning','reports','staff']
+    assert output[1]['status']=='completed'
+    assert output[2]['status']=='needs_review'
+    assert output[3]['attempted'] is False and output[3]['blocked_by']=='planning'
+    assert output[4]['attempted'] is False and output[4]['blocked_by']=='planning'
+
+
+def test_independent_checks_cannot_clear_an_earlier_dependency_hold():
+    visited=[]
+    output=execute_graph(['planning','reports','staff','payment'],
+                         lambda step: visited.append(step) or result(step,'needs_review' if step=='planning' else 'completed'),
+                         independent_steps=('reports','staff'))
+    assert visited == ['planning','reports','staff']
+    assert output[-1]['attempted'] is False
+    assert output[-1]['blocked_by']=='planning'
+
+
+def test_independent_step_not_in_workflow_rejected():
+    with pytest.raises(ValueError):
+        execute_graph(['planning'],lambda step:result(step,'completed'),independent_steps=('payment',))
