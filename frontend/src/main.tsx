@@ -1,6 +1,9 @@
+import { ReleaseNotice } from "./release-notice";
+document.documentElement.dataset.theme = "light";
+try { localStorage.removeItem("timmy-theme"); } catch { /* Storage may be disabled. */ }
 import { Observatory, ExecutionSummary } from "./observatory";
 import { MotionConfig, motion } from "motion/react";
-import { Menu, Moon, Sun } from "lucide-react";
+import { Menu } from "lucide-react";
 import { DemoWorkbook } from "./demo-workbook";
 import { workspaceLocation } from "./workspace-location";
 import { AccessManagement } from "./iam";
@@ -38,9 +41,8 @@ const pages = {
 type Page = keyof typeof pages;
 
 function Workspace({ session, onExit, onSession }: { session: Session; onExit: () => void; onSession: (session: Session) => void }) {
-  const [theme, setTheme] = useState(() => localStorage.getItem("timmy-theme") || (matchMedia('(prefers-color-scheme: dark)').matches ? "dark" : "light"));
   const [collapsed, setCollapsed] = useState(false);
-  useEffect(() => { document.documentElement.dataset.theme = theme; localStorage.setItem("timmy-theme", theme); }, [theme]);
+
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeId, setActiveId] = useState<string>();
   const [chatVersion, setChatVersion] = useState(0);
@@ -161,7 +163,6 @@ function Workspace({ session, onExit, onSession }: { session: Session; onExit: (
           <div className="account">
             {canReadProjects && <div className="topbar-system-status" title="Ollama status checked when the workspace opens"><LocalAI /></div>}
             <a href="#security" className="account-link">{session.username}<small>{session.role}</small></a>
-            <button className="secondary theme-toggle" aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`} onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}>{theme === 'dark' ? <Sun size={17} /> : <Moon size={17} />}</button>
             {session.demo_mode && <Badge tone="amber">Demo mode</Badge>}
 
           </div>
@@ -233,4 +234,4 @@ function App() {
   return session ? <Workspace session={session} onSession={setSession} onExit={() => setSession(null)} /> : <Login onLogin={setSession} />;
 }
 
-createRoot(document.getElementById("root")!).render(<App />);
+createRoot(document.getElementById("root")!).render(<><ReleaseNotice /><App /></>);

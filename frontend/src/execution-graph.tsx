@@ -24,7 +24,7 @@ export default function ExecutionGraph({ runId, spans, filtered, onSelect, onCol
       animated: s.status === 'running' && !reduced, style: { stroke: s.status === 'failed' ? '#f87171' : '#64748b', strokeDasharray: '4 4' } })),
       ...filtered.flatMap(s => s.dependencies.filter(dep => visible.has(dep)).map(dep => ({ id: `dependency-${dep}-${s.id}`, source: dep, target: s.id, label: 'depends on', animated: s.status === 'running' && !reduced, style: { stroke: critical.has(s.id) && critical.has(dep) ? '#38bdf8' : '#64748b' } }))) ] };
   }, [filtered, spans, reduced]);
-  return <div className="flow-viewport"><ReactFlow key={runId} nodes={graph.nodes} edges={graph.edges} fitView minZoom={0.1} maxZoom={2} onlyRenderVisibleElements
+  return <div className="flow-viewport"><ReactFlow colorMode="light" key={runId} nodes={graph.nodes} edges={graph.edges} fitView minZoom={0.1} maxZoom={2} onlyRenderVisibleElements
     nodesDraggable={false} nodesConnectable={false} onNodeClick={(_event, node) => onSelect(node.id)} onNodeDoubleClick={(_event, node) => onCollapse(node.id)}>
     <Background gap={24} color="#94a3b825" /><MiniMap pannable zoomable /><Controls showInteractive={false} />
   </ReactFlow></div>;
