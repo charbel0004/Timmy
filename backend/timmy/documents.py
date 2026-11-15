@@ -133,7 +133,7 @@ def list_documents(principal: Authenticated, db: Database, conversation_id: UUID
     conversation_owned(db, principal, identifier)
     from .models import MappingProposal
     mappings=list(db.scalars(select(MappingProposal).where(MappingProposal.actor_id==principal.user.id)
-                             .order_by(MappingProposal.id.desc())))
+                             .order_by(MappingProposal.created_at.desc(),MappingProposal.version.desc())))
     result=[]
     for file,record in db.execute(scoped_documents(db,principal,identifier).order_by(StoredFile.uploaded_at.desc()).limit(100)):
         item=describe(file,record)

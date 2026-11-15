@@ -233,3 +233,16 @@ def test_planning_format_proposals_use_original_project_rows_and_require_human_c
     body.update(sample_code=p['sample_code'],source_fingerprint='0'*64)
     assert c.post(f'/api/global-mappings/contracts/{p["project_id"]}',headers=h,json=body).status_code==409
     with Session(c.app.state.engine) as db:assert not list(db.scalars(select(PlanningCodeContract)))
+
+
+def test_import_history_shows_new_mapping_review_instead_of_old_confirmation(coordinator):
+    from timmy.models import MappingProposal
+    c,h,conv=coordinator
+    load(coordinator,'01_Happy_Path')
+    with Session(c.app.state.engine) as db,db.begin():
+        previous=db.scalar(select(MappingProposal).where(MappingProposal.conversation_id==conv))
+        db.add(MappingProposal(id='00000000-0000-0000-0000-000000000000',conversation_id=conv,
+            actor_id=120,project_id=previous.project_id,fingerprint='changed-scope',
+            version=previous.version+100,sheets=previous.sheets,created_at=previous.created_at+1,status='proposed'))
+    items=c.get('/api/documents',params={'conversation_id':conv}).json()
+    assert all(item['status']=='PARSED_MAPPING_REQUIRED' for item in items)
