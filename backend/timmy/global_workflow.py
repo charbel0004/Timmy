@@ -352,7 +352,7 @@ def run_global_workflow(db, principal, config, conversation, documents, *, workf
             for code in item.get('issue_codes', [])
             if code != 'DEPENDENCY_NOT_SATISFIED'
         })
-        report.append(f"\\n**{project['project_code']} — {'Action required' if actionable else 'Checks recorded'} (run #{run.id})**")
+        report.append(f"\n**{project['project_code']} — {'Action required' if actionable else 'Checks recorded'} (run #{run.id})**")
         checks = [item for item in results if item['step'] in
                   {'check_planning', 'check_reports', 'select_timesheets'}]
         if checks:
