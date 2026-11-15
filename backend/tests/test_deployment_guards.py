@@ -74,13 +74,13 @@ def test_server_cannot_expose_live_dotenv_to_test_runner():
 
 def test_observability_migration_declaration_is_exactly_pinned():
     fields = (ROOT / 'ops/deploy/additive-migration').read_text().split()
-    assert fields[:2] == ['0018', '0019']
-    migration = 'backend/migrations/versions/0019_execution_observability.py'
+    assert fields[:2] == ['0019', '0020']
+    migration = 'backend/migrations/versions/0020_reporting_register.py'
     assert fields[2] == migration and len(fields) == 4
     blob = subprocess.check_output(['git', 'hash-object', migration], cwd=ROOT, text=True).strip()
     assert fields[3] == blob
     changes = subprocess.check_output(['git', 'diff', '--name-status',
-        'da97587e7f0006c6a04c79e77efbafbbfe972da3', '--', 'backend/migrations'], cwd=ROOT, text=True).strip()
+        'f203273f42b937eab8605445c89ecf759e0d6096', '--', 'backend/migrations'], cwd=ROOT, text=True).strip()
     assert changes == 'A\t' + migration
 
 
@@ -88,7 +88,7 @@ def test_active_release_serves_expanded_observability_schema(tmp_path, client):
     import io
     import tarfile
     archive = subprocess.check_output(['git', 'archive',
-        'da97587e7f0006c6a04c79e77efbafbbfe972da3', 'backend'], cwd=ROOT)
+        'f203273f42b937eab8605445c89ecf759e0d6096', 'backend'], cwd=ROOT)
     old = tmp_path / 'active-release'
     old.mkdir()
     with tarfile.open(fileobj=io.BytesIO(archive)) as source:

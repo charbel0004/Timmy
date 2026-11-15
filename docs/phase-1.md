@@ -142,3 +142,49 @@ requires an explicitly authorized remote adapter; loopback-only defaults remain.
 
 See [architecture map](observability/architecture.md) and
 [implementation, verification and rollout](observability/implementation.md).
+
+## Workflow repair: source interpretation and explicit contracts
+
+Source date candidates accept ISO date strings and midnight Excel datetime
+representations; original import values remain unchanged. Ambiguous/localized
+and nonmidnight dates remain review-required. Project views retain shared staff
+reference sheets as untrusted matching candidates. Report and hourly columns
+have distinct mapping categories. HOURS diagnostics use the deterministic fixed
+rules and remain explicitly nonauthoritative. Registry absence is distinguished
+from absence in uploaded planning. Global displayed data-row counts exclude
+headers. Combined process/payment requests select the full weekly goal and do
+not confer approval.
+
+GET /api/workflows/definitions publishes prerequisites, expected outputs,
+next actions and implementation availability for every declared workflow step.
+These definitions distinguish usable shared-chat handlers from missing legacy
+integrations and expose the actual triggers. The Excel integration below
+supersedes the earlier generic report-provider and global-mapping blockers.
+Unresolved hourly tie/month-boundary/cost attribution rules retain their existing
+review blockers. A finance-return source contract and governed amendments remain
+open decisions; activity-report status never establishes settlement.
+
+## Excel reporting authority and global processing (0020, supersedes prior integration notes)
+
+The chosen report-status source is now an explicitly designated Excel register,
+not an API. Source designation and per-original coordinator provenance declarations
+are recorded separately. The assurance level is coordinator-declared, **not
+independently authenticated by the reporting team**. Report mapping/versions,
+submission/validation timestamps, evidence IDs and original file hashes/coordinates
+are preserved. First accepted validation freezes the validated version's submission
+date; later exports cannot silently extend it. Missing/contradictory evidence blocks
+financial use. See [Excel workflow contract](excel-reporting-workflow.md).
+
+Shared chat now has one source-mapping review for all matched projects, scoped
+planning registration, register synchronization and resumable planning/staff review
+checkpoints. Source-format approvals and financial permissions are explicit human
+configuration actions. Deterministic drafts bind immutable original/mapping/review,
+report-cutoff and rule-version snapshots. Destination/allocation review creates a
+new snapshot; exact financial approval reserves unique credits/months; approved
+CSV exports remain manual files, never transfers or settlement. Existing roles gain
+no automatic payments.allocate/payments.approve rights. Financial amendments of
+already-reserved months/credits remain review-required, not automatic delta payments.
+
+Legacy finance-return/reconciliation adapters still require their own approved
+source contract. An activity reporting register is not settlement evidence. No
+status in the register or chat can mark actual payments settled.

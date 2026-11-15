@@ -35,20 +35,26 @@ See [Phase 1 architecture and open decisions](docs/phase-1.md).
 
 ## Stored workflows
 
-Select a project in Context and use brief requests such as `Analyze`, `Process`,
-`Run weekly`, `Show flags`, or `Reconcile the payment report`. Procedures are
-stored in `backend/timmy/workflow_knowledge.json`; the user supplies the goal,
-not the steps. Analyze verifies already-uploaded intake and offers processing.
-Runs preserve evidence references and per-step outcomes. Missing authoritative
-validation, resolution and financial adapters remain explicit blockers.
+Upload the planning, official reporting-register and timesheet workbooks in the
+shared chat, then request `Process` or `Process and prepare a payment request`.
+Timmy matches approved project acronyms and source activity codes. Review unknown
+column mappings once, declare the register export's provenance, and complete the
+separate planning/staff evidence reviews. Each confirmation resumes the original
+goal. Report status, frozen cutoffs and deterministic session/hour rules gate
+immutable payment drafts. Explicit scoped allocation and exact-snapshot human
+approval are required before downloading a request file for manual sending.
+
+See [Excel reporting, workflow contracts and payment gates](docs/excel-reporting-workflow.md)
+for the supported shared-chat path, permissions and migration 0020. This path
+does not execute transfers or reconcile bank settlement. The legacy project
+runner and scheduled runner retain their existing guarded adapters; scheduling
+does not inherit shared-chat authority or bypass any review.
 
 Weekly scheduling is off by default. To enable it, set
 `TIMMY_WEEKLY_ENABLED=true`, an authorized `TIMMY_WEEKLY_ACTOR_ID`, and an
 explicit `TIMMY_WEEKLY_PROJECT_IDS` list. It runs once per project on Mondays
-at 04:00 Asia/Beirut and catches up later that Monday. Apply
-migration 0013 before starting the updated app. Payment requests are intended as
-files for the coordinator to send manually; the required approved-batch export
-adapter is not yet implemented, and no automatic external delivery occurs.
+at 04:00 Asia/Beirut and catches up later that Monday. Scheduled runs preserve
+missing-integration blockers; use the shared chat for the Excel approval path.
 
 See [workflow triggers and remaining integrations](docs/ai/WORKFLOW_TRIGGERS.md).
 

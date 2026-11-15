@@ -58,7 +58,7 @@ def test_global_chat_upload_maps_both_projects_and_stops_financial_work(client, 
     assert "UNKNOWN_PROJECT_CODE: 1" in analyzed
     assert "Only intake/routing is verified" in analyzed
     processed = message("Process both project timesheets")
-    assert "MULTI_PROJECT_VALIDATION_ADAPTER_REQUIRED" in processed
+    assert "PROJECT_ROUTING_REVIEW_REQUIRED" in processed
     assert "No cross-project source registration" in processed
     assert "check_planning" in processed
     state = client.get(f"/api/chat/conversations/{cid}/workflow")
@@ -72,7 +72,7 @@ def test_global_chat_upload_maps_both_projects_and_stops_financial_work(client, 
     assert "Recorded global workflow status" in status_text
     assert "run #" in status_text
     history = client.get(f"/api/chat/conversations/{cid}").json()
-    assert "MULTI_PROJECT_VALIDATION_ADAPTER_REQUIRED" in history["messages"][-3]["text"]
+    assert "PROJECT_ROUTING_REVIEW_REQUIRED" in history["messages"][-3]["text"]
 
     with Session(client.app.state.engine) as db:
         runs = db.scalars(select(WorkflowRun).order_by(WorkflowRun.id)).all()

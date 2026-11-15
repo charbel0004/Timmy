@@ -45,6 +45,7 @@ def register_planning(db, principal, documents, sheets, mapping_id):
             raise HTTPException(409,'Planning registration requires an active project with a code prefix')
         contract=db.get(PlanningCodeContract,file.project_id)
         for index,sheet in enumerate(record.sheets):
+            index=sheet.get('source_sheet_index',index)
             if selections[file.id,index]['kind']!='planning':continue
             headers=sheet['rows'][0]['values']
             for source in sheet['rows'][1:]:
@@ -116,6 +117,7 @@ def register_planning(db, principal, documents, sheets, mapping_id):
     for file,record in documents:
         copied=copy.deepcopy(record.sheets)
         for index,sheet in enumerate(copied):
+            index=sheet.get('source_sheet_index',index)
             if selections[file.id,index]['kind']!='planning':continue
             headers=sheet['rows'][0]['values']
             if 'activity_code' not in headers:headers.append('activity_code')

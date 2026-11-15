@@ -414,7 +414,7 @@ async def answer(conversation_id, payload, request, principal, db, identifier, r
         check_integrity(config, documents)
         reply = global_workflow_status(db, principal, conversation, documents)
         record("Read recorded global project workflow status")
-    elif multi_project_documents and choose_workflow(payload.message) in {'analyze_intake', 'process_activity', 'show_issues'}:
+    elif multi_project_documents and choose_workflow(payload.message) in {'analyze_intake', 'process_activity', 'show_issues', 'weekly_cycle', 'prepare_payment', 'resolve_issues'}:
         selection = choose_workflow(payload.message)
         reply = run_global_workflow(db, principal, config, conversation, documents,
                                     workflow_id=selection, request_id=request_id, on_step=record)

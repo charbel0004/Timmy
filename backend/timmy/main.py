@@ -12,6 +12,9 @@ from sqlalchemy.orm import Session
 from .auth import current_principal, Authenticated, Database
 import re
 
+from .workflow_payments import router as workflow_payments_router
+from .global_mappings import router as global_mappings_router
+from .reporting_register import router as reporting_register_router
 from .payment_configuration import router as payment_policy_router
 from .demo_operations import router as demo_router
 from .config import Settings, settings
@@ -68,7 +71,7 @@ def create_app(config: Settings | None = None) -> FastAPI:
     async def trace_operations(request: Request, call_next):
         path = request.url.path
         tracked = request.method in {"POST", "PUT", "PATCH", "DELETE"} and any(
-            path.startswith('/api/' + area) for area in ('chat/', 'documents', 'workflows', 'operations', 'projects', 'workspace/projects', 'workspace/activities'))
+            path.startswith('/api/' + area) for area in ('chat/', 'documents', 'workflows', 'operations', 'projects', 'workspace/projects', 'workspace/activities', 'reporting-register', 'global-mappings', 'workflow-payments'))
         trace = None
         if tracked and config.telemetry_enabled:
             try:
@@ -123,6 +126,9 @@ def create_app(config: Settings | None = None) -> FastAPI:
     def overview(principal: Authenticated, db: Database):
         return overview_data(principal, db)
 
+    app.include_router(workflow_payments_router)
+    app.include_router(global_mappings_router)
+    app.include_router(reporting_register_router)
     app.include_router(telemetry_router)
     app.include_router(router)
     app.include_router(document_router)

@@ -26,11 +26,7 @@ ROLES = {
 }
 
 
-def parse_date(value):
-    try:
-        return date.fromisoformat(value) if re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", value) else None
-    except ValueError:
-        return None
+from .source_dates import source_date as parse_date
 
 
 def escape(value):
@@ -40,6 +36,7 @@ def escape(value):
 @instrument("session.preview", "rule")
 def preview(documents, *, snapshot=None, report_cutoffs=None, activity_registry=None, project_codes=None):
     plans = defaultdict(set)
+    plan_statuses = defaultdict(set)
     directory = defaultdict(set)
     claims = defaultdict(list)
     issues = defaultdict(Counter)
@@ -74,6 +71,9 @@ def preview(documents, *, snapshot=None, report_cutoffs=None, activity_registry=
                 kind = "planning"
             elif DIRECTORY <= names:
                 kind = "directory"
+            elif {'validation status', 'external report reference'} <= names or {'report_id', 'validated_at'} <= names:
+                decision.update(kind='reports', reason='Report claims retained; independent provider validation required')
+                continue
             else:
                 decision.update(kind="reference" if {"project_code", "project_name"} <= names else "unsupported",
                                 reason="Project reference only" if {"project_code", "project_name"} <= names else "Mapping required")
@@ -88,6 +88,8 @@ def preview(documents, *, snapshot=None, report_cutoffs=None, activity_registry=
                     continue
                 if kind == "planning":
                     plans[key].add((row.get("approved_start_date", ""), row.get("approved_end_date", "")))
+                    if 'approval_status' in row or 'approval status' in row:
+                        plan_statuses[key].add(row.get('approval_status',row.get('approval status','')).upper())
                 elif kind == "directory":
                     directory[file.project_id, row.get("staff_id", "")].add(row.get("status", "").casefold())
                 else:
@@ -129,10 +131,12 @@ def preview(documents, *, snapshot=None, report_cutoffs=None, activity_registry=
             break
         codes = issues[key]
         candidates = plans[key]
+        if plan_statuses[key] and plan_statuses[key]!={'APPROVED'}:
+            codes['PLANNING_STATUS_NOT_APPROVED'] += 1
         registered = (activity_registry or {}).get(key)
         if activity_registry is not None:
             if not registered:
-                codes['ACTIVITY_NOT_IN_PLANNING'] += 1
+                codes['ACTIVITY_REGISTRATION_REQUIRED' if candidates else 'ACTIVITY_NOT_IN_PLANNING'] += 1
             elif not candidates:
                 candidates = {(registered['planned_start'], registered['planned_end'])}
             elif candidates != {(registered['planned_start'], registered['planned_end'])}:

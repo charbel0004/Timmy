@@ -37,6 +37,8 @@ def health(request: Request, db: Database):
         if request.app.state.config.telemetry_enabled:
             db.execute(text("SELECT heartbeat_at FROM execution_runs LIMIT 0"))
             db.execute(text("SELECT payload FROM execution_events LIMIT 0"))
+        db.execute(text("SELECT assurance FROM reporting_register_imports LIMIT 0"))
+        db.execute(text("SELECT digest FROM workflow_payment_drafts LIMIT 0"))
     except SQLAlchemyError:
         raise HTTPException(503, "Database unavailable or migrations pending") from None
     return {"status": "ok"}

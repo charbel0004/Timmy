@@ -12,7 +12,7 @@ import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { api, ApiError, errorMessage } from "./api";
 import type { Session } from "./api";
-import { StructuralReview, LocalAI, Dashboard, DocumentHistory, Login, OperationsPage, SettingsPanel } from "./features";
+import { WorkflowDefinitions, StructuralReview, LocalAI, Dashboard, DocumentHistory, Login, OperationsPage, SettingsPanel } from "./features";
 import { Badge, Brand, Icon } from "./design";
 import { Assistant, ConversationHistory } from "./assistant";
 
@@ -78,6 +78,15 @@ function Workspace({ session, onExit, onSession }: { session: Session; onExit: (
     );
     return () => { active = false; };
   }, [canReadProjects]);
+
+  useEffect(() => {
+    if (page !== 'assistant' || !activeId || chatBusy) return;
+    let current = true;
+    api.conversation(activeId).then(updated => {
+      if (current) setConversations(items => items.map(item => item.id === updated.id ? updated : item));
+    }, error => { if (current) setHistoryError(errorMessage(error)); });
+    return () => { current = false; };
+  }, [page, activeId, chatBusy]);
 
   async function openConversation(id?: string) {
     if (chatBusy) return;
@@ -173,14 +182,14 @@ function Workspace({ session, onExit, onSession }: { session: Session; onExit: (
           {page === "assistant" && <>
             {historyError && <p role="alert">{historyError}</p>}
             {canReadProjects ? <Assistant key={chatVersion} conversation={conversations.find((item) => item.id === activeId)}
-              append={append} canReadProjects={canReadProjects} csrfToken={session.csrf_token}
+              projectPermissions={session.project_permissions} canDesignateReports={canReadSettings && session.permissions.includes("projects:manage")} canConfirmReports={session.permissions.includes("projects:manage")} append={append} canReadProjects={canReadProjects} csrfToken={session.csrf_token}
               onBusy={setChatBusy} /> : <p role="alert">Permission denied.</p>}
           </>}
           {session.demo_mode && (page === "dashboard" || page === "projects" || page === "imports" || page === "batches")
             && <DemoWorkbook key={page} show={page} />}
           {page === "dashboard" && (canReadProjects ? <Dashboard /> : <p role="alert">Permission denied.</p>)}
           {page === "observatory" && canReadProjects && <Observatory />}
-          {page === "reports" && canReadProjects && <ExecutionSummary />}
+          {page === "reports" && canReadProjects && <><WorkflowDefinitions /><ExecutionSummary /></>}
           {page === "reconciliation" && visible(page) && <section className="glass-panel operation-panel"><h2>External payment reconciliation</h2><p className="muted">Use the existing guarded reconciliation workflow in AI Workspace with the payment report attached. Its stored receipts identify source evidence, unmatched records, and approval blockers.</p><a href="#assistant" className="hero-action">Open reconciliation workspace →</a><p className="muted">External settlement remains a separate source of authority. The payment obligation summary adapter is unavailable.</p></section>}
           {page === "settings" && (canReadSettings ? <SettingsPanel /> : <p role="alert">Permission denied.</p>)}
           {(page === "projects" || page === "activities") &&
