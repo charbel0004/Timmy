@@ -49,9 +49,11 @@ def conversation(client, tmp_path, monkeypatch):
             ids.append(r.json()['id'])
         return ids
     ids=upload()
+    # These fixtures exercise the explicit single-project protocol.
+    # Unselected/global defaults are covered by test_global_chat_projects.py.
     def send(message, **context):
         r=client.post(f'/api/chat/conversations/{identifier}/messages',headers=headers,
-                      json={'request_id':str(uuid4()),'message':message,**context})
+                      json={'request_id':str(uuid4()),'message':message,'project_id':1,**context})
         assert r.status_code==200,r.text
         return r.json()['message']['text']
     def state():

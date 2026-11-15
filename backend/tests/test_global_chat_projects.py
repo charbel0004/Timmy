@@ -113,11 +113,16 @@ def test_all_active_projects_are_visible_in_an_unselected_chat_even_when_source_
     assert login.status_code == 200, login.text
     headers = ORIGIN | {"X-CSRF-Token": login.json()["csrf_token"]}
     cid = client.post("/api/chat/conversations", headers=headers).json()["id"]
-    csv = ("project_code,activity_code,approved_start_date,approved_end_date\\n"
-           "TCD,26-TCD-011,2026-11-01,2026-11-30\\n")
+    csv = ("project_code,activity_code,approved_start_date,approved_end_date\n"
+           "TCD,26-TCD-011,2026-11-01,2026-11-30\n")
     uploaded = client.post("/api/documents", params={"filename":"planning.csv","conversation_id":cid,"project_id":1},
                            content=csv.encode(), headers=headers | {"Content-Type":"text/csv"})
     assert uploaded.status_code == 201, uploaded.text
+    # Explicit legacy selection remains supported; it must not pin later global requests.
+    selected=client.post(f"/api/chat/conversations/{cid}/messages", headers=headers,
+        json={"message":"Analyze these files","request_id":str(uuid4()),"project_id":1})
+    assert selected.status_code==200,selected.text
+    assert client.get(f"/api/chat/conversations/{cid}/workflow").json()['stage']=='INTAKE_VERIFIED'
     reply = client.post(f"/api/chat/conversations/{cid}/messages", headers=headers,
                         json={"message":"Analyze these files","request_id":str(uuid4())})
     assert reply.status_code == 200, reply.text

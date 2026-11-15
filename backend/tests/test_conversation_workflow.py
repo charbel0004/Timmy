@@ -46,9 +46,11 @@ def conversation(client, tmp_path, monkeypatch):
             ids.append(r.json()['id'])
         return ids
     ids=upload()
+    # These fixtures exercise the explicit single-project protocol.
+    # Unselected/global defaults are covered by test_global_chat_projects.py.
     def send(message, **context):
         r=client.post(f'/api/chat/conversations/{identifier}/messages',headers=headers,
-                      json={'request_id':str(uuid4()),'message':message,**context})
+                      json={'request_id':str(uuid4()),'message':message,'project_id':1,**context})
         assert r.status_code==200,r.text
         return r.json()['message']['text']
     def state():
@@ -225,7 +227,7 @@ def test_explicit_human_mapping_can_use_a_real_unrecognized_header(conversation)
     updated=dict(files);updated['timesheets_valid.csv']=updated['timesheets_valid.csv'].replace('staff_id,role','employee_ref,role',1)
     upload(updated,identifier)
     def chat(message):
-        return c.post(f'/api/chat/conversations/{identifier}/messages',headers=h,json={'message':message,'request_id':str(uuid4())})
+        return c.post(f'/api/chat/conversations/{identifier}/messages',headers=h,json={'message':message,'request_id':str(uuid4()),'project_id':1})
     assert chat('Process').status_code==200
     workflow=c.get(f'/api/chat/conversations/{identifier}/workflow').json();p=workflow['mapping']
     assert 'staff_id' in chat('Confirmed').json()['message']['text']
@@ -272,7 +274,7 @@ def test_permission_revoked_before_confirmation_is_enforced(conversation):
     assert r.status_code in (403,404)
 
 
-def test_inferred_project_does_not_broaden_conversation_scope_after_refresh(conversation):
+def test_selected_project_does_not_broaden_conversation_scope_after_refresh(conversation):
     c,h,conv,send,state,upload,files,_=conversation
     other=c.post('/api/chat/conversations',headers=h).json()['id']
     for _ in range(4): upload(files,other)

@@ -143,7 +143,7 @@ def test_timesheet_cannot_create_activity(conversation):
     c,h,conv,send,state,upload,files,_=conversation
     new=c.post('/api/chat/conversations',headers=h).json()['id']
     ids=upload({'claims.csv':files['timesheets_valid.csv']},new)
-    def chat(message):return c.post(f'/api/chat/conversations/{new}/messages',headers=h,json={'message':message,'request_id':str(uuid4()),'document_ids':ids})
+    def chat(message):return c.post(f'/api/chat/conversations/{new}/messages',headers=h,json={'message':message,'request_id':str(uuid4()),'document_ids':ids,'project_id':1})
     chat('Process');result=chat('Confirmed')
     assert 'ACTIVITY_NOT_IN_PLANNING' in result.json()['message']['text']
     assert c.get('/api/workspace/activities').json()==[]
