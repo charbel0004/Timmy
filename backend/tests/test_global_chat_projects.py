@@ -59,8 +59,11 @@ def test_global_chat_upload_maps_both_projects_and_stops_financial_work(client, 
     assert "Only intake/routing is verified" in analyzed
     processed = message("Process both project timesheets")
     assert "PROJECT_ROUTING_REVIEW_REQUIRED" in processed
-    assert "No cross-project source registration" in processed
+    assert "Payments are not executed by Agent Timmy" in processed
     assert "check_planning" in processed
+    assert "Next decision:" in processed
+    assert "Provisional source-based policy checks" not in processed
+    assert "validate_activity: blocked" not in processed
     state = client.get(f"/api/chat/conversations/{cid}/workflow")
     assert state.status_code == 200, state.text
     global_state = state.json()

@@ -62,7 +62,7 @@ def run_global_workflow(db, principal, config, conversation, documents, *, workf
     if automatic:
         report.append("Source sheets were classified and their columns mapped automatically at high "
                       f"confidence for project(s) {', '.join(map(str, automatic))}; no mapping review was required.")
-    report.append("\n### Actual project-specific workflow receipts")
+    report.append("\n### Decisions and next actions")
     for project_id in sorted(project_ids):
         principal.require("timesheets.view", project_id)
         if db.scalar(select(projects.c.status).where(projects.c.id == project_id)) != "active":
@@ -344,38 +344,80 @@ def run_global_workflow(db, principal, config, conversation, documents, *, workf
         audit(db, "workflow_run_recorded", principal.user.id,
               resource_type="workflow_run", resource_id=str(run.id),
               outcome=status, trigger=workflow_id)
-        report.append(f"- Project {project_id}: {workflow_id} run #{run.id} — {status}.")
-        if finding_rows:
-            open_flags=[row for row in finding_rows if row.state in BLOCKING_STATES]
-            report.append(f'  Flag decision round: {len(open_flags)} open of {len(finding_rows)} '
-                          'recorded findings for this snapshot.')
-            report.append('  Decide each flag once in the Flag decisions panel; an invalidated record is '
-                          'excluded from the payment request, never paid.')
-        if structural['resolution_recommendations']:
-            report.append('  Resolution recommendations (no unauthorized correction applied):')
-            for code,recommendation in structural['resolution_recommendations'].items():
-                report.append(f'  - {code}: {recommendation}')
-        if provisional:
-            report.append("  Provisional source-based policy checks (NOT authoritative validation):")
-            report.append(provisional)
-        from .workflow_contracts import CONTRACTS
-        first_hold = next((r for r in results if r['status'] != 'completed'), None)
-        if validation:
-            report.append(f'  Evidence review: [Review planning and staff evidence](#imports/validation/{validation.id}).')
+        # The full provisional previews, findings and per-step receipts are
+        # retained in WorkflowRun.snapshot and the Execution Observatory.
+        # Do not copy them repeatedly into the coordinator chat.
+        actionable = sorted({
+            code for item in results if item.get('attempted') is not False
+            for code in item.get('issue_codes', [])
+            if code != 'DEPENDENCY_NOT_SATISFIED'
+        })
+        report.append(f"\n**{project['project_code']} — {'Action required' if actionable else 'Checks recorded'} (run #{run.id})**")
+        checks = [item for item in results if item['step'] in
+                  {'check_planning', 'check_reports', 'select_timesheets'}]
+        if checks:
+            report.append("Checks: " + " · ".join(
+                f"{item['step']}: {item['status']}" for item in checks))
+        if actionable:
+            report.append("Open gates: " + ", ".join(actionable))
+        actions = []
+        if overview['issue_counts']:
+            actions.append("Review project-identity conflicts against source rows.")
+        if not confirmed:
+            actions.append(f"[Confirm ambiguous source mappings](#assistant/{conversation.id}).")
         if registration_issue:
-            report.append('  Planning registration requires review: '+registration_issue)
-        if first_hold:
-            report.append('  Required next action: ' + CONTRACTS[first_hold['step']][2] + '.')
-        for result in results:
-            report.append(f"  - {result['step']}: {result['status']}"
-                          + (f" ({', '.join(result['issue_codes'])})"
-                             if result["issue_codes"] else ""))
-            if result.get('recommendation'):
-                report.append('    Next: '+result['recommendation'])
-    if not advanced:
-        report.append("No cross-project source registration, identity confirmation, report validation, payment eligibility, export or settlement was performed.")
-    else:
-        report.append("Original sources and evidence decisions are preserved. Only completed receipts above establish progress; actual payment transfers and settlement remain external.")
+            actions.append("Review the source-issued planning code format: " + registration_issue)
+        if validation:
+            activities = structural['activities']
+            def missing_evidence(kind):
+                from .models import EvidenceReview
+                missing = []
+                for activity in activities:
+                    decision = db.scalar(select(EvidenceReview.decision).where(
+                        EvidenceReview.validation_id == validation.id,
+                        EvidenceReview.kind == kind,
+                        EvidenceReview.project_code == activity['project_code'],
+                        EvidenceReview.activity_code == activity['activity_code'],
+                    ).order_by(EvidenceReview.id.desc()).limit(1))
+                    if decision != 'confirmed':
+                        missing.append(activity['activity_code'])
+                return missing
+            for kind in ('planning', 'staff'):
+                missing = missing_evidence(kind)
+                if missing:
+                    label = 'planning authority' if kind == 'planning' else 'staff identities'
+                    actions.append(
+                        f"Verify {label} for {', '.join(sorted(missing))}: "
+                        f"[open Evidence Review](#imports/validation/{validation.id}), "
+                        f"select {kind.title()}, and record the independent evidence reference.")
+        missing_reports = [a['activity_code'] for a in structural['activities']
+                           if a['activity_code'] not in excluded_activities(finding_rows)
+                           and (project_id, project['project_code'], a['activity_code']) not in cutoffs]
+        if missing_reports:
+            actions.append("Check approved reporting evidence for: " + ", ".join(sorted(missing_reports)) + ".")
+        if finding_rows:
+            outstanding = [row for row in finding_rows if row.state in BLOCKING_STATES]
+            if outstanding:
+                actions.append(f"Decide {len(outstanding)} unresolved finding(s) in the Flag decisions panel.")
+        financial = [item for item in results
+                     if item['step'] in {'prepare_payment_request','export_payment_request'}
+                     and item.get('attempted') is not False and item['status'] != 'completed']
+        for item in financial:
+            if 'EXACT_BATCH_APPROVAL_REQUIRED' in item['issue_codes']:
+                actions.append("Review and authorize the exact payment-request snapshot in Payment review.")
+            elif 'APPROVED_FILE_READY_FOR_MANUAL_DOWNLOAD' in item['issue_codes']:
+                actions.append("Download the approved payment-request CSV for manual delivery.")
+            elif item.get('recommendation'):
+                actions.append("Payment request: " + str(item['recommendation']))
+        if actions:
+            for action in actions:
+                report.append("**Next decision:** " + action)
+        elif actionable:
+            report.append("**Next decision:** Review the open gates and original evidence in Execution Observatory.")
+        else:
+            report.append("No outstanding decision identified in these recorded steps.")
+        report.append("Detailed row previews and step receipts are retained in the saved execution record.")
+    report.append("Payments are not executed by Agent Timmy; financial export requires exact authorized approval.")
     return "\n".join(report)
 
 
@@ -403,10 +445,26 @@ def global_workflow_status(db, principal, conversation, documents):
     lines = ["Recorded global workflow status (synchronous; no background queue):"]
     for pid, run in sorted(by_project.items()):
         lines.append(f"- Project {pid}: {run.workflow_id}, run #{run.id}, {run.status}.")
-        for step in run.snapshot["steps"]:
-            lines.append(f"  - {step['step']}: {step['status']}"
-                         + (f" ({', '.join(step['issue_codes'])})"
-                            if step["issue_codes"] else ""))
+        steps = run.snapshot["steps"]
+        important = [s for s in steps if s['step'] in {'check_planning','check_reports','select_timesheets'}]
+        lines.append("  Checks: " + " · ".join(
+            f"{item['step']} {item['status']}" for item in important))
+        gates = sorted({code for item in steps if item.get('attempted') is not False
+                        for code in item.get('issue_codes', [])
+                        if code != 'DEPENDENCY_NOT_SATISFIED'})
+        if gates:
+            lines.append("  Open gates: " + ", ".join(gates))
+        validation_id = run.snapshot.get('structural_validation_id')
+        if validation_id and any(code in gates for code in
+                                 ('STAFF_VERIFICATION_REQUIRED','PLANNING_APPROVAL_EVIDENCE_REQUIRED')):
+            lines.append(f"  Next decision: [Review planning/staff evidence](#imports/validation/{validation_id}); "
+                         "select the outstanding category and record its evidence reference.")
+        elif 'REPORT_VALIDATION_EVIDENCE_REQUIRED' in gates:
+            lines.append("  Next decision: verify the reporting-register evidence.")
+        elif 'EXACT_BATCH_APPROVAL_REQUIRED' in gates:
+            lines.append("  Next decision: approve the exact payment-request snapshot.")
+        elif gates:
+            lines.append("  Next decision: review the gate codes and source evidence in Execution Observatory.")
     lines.append("Planning/report/staff approval and financial actions remain independently gated.")
     return "\n".join(lines)
 
