@@ -61,18 +61,25 @@ def execute_graph(
     *,
     on_result: Callable[[dict], None] | None = None,
     blocked_context: Callable[[str], dict] | None = None,
+    independent_steps: Sequence[str] = (),
 ) -> list[dict]:
     """Run an approved ordered workflow exactly once.
 
     Precondition: the caller authenticated the actor, rechecked project scope,
     verified evidence, and bound evaluator to reviewed backend functions.
-    A review, blocker or failure stops ALL dependent handler invocations.
-    Each downstream receipt is retained as a nonexecuted dependency hold.
+    A review, blocker or failure stops dependent handler invocations. The caller
+    may nominate independently safe evidence checks to run during a pause;
+    their success cannot clear the earlier hold or authorize later writes.
+    Other downstream receipts remain nonexecuted dependency holds.
     A source/DB transaction still belongs to the caller, not to LangGraph.
     """
     steps = tuple(ordered_steps)
     if not steps or len(set(steps)) != len(steps) or any(not s or not isinstance(s, str) for s in steps):
         raise ValueError("Invalid approved workflow steps")
+
+    independent = frozenset(independent_steps)
+    if not independent <= set(steps):
+        raise ValueError('Independent steps must belong to this approved workflow')
 
     receipts: list[dict] = []
     graph = StateGraph(ExecutionState)
@@ -85,7 +92,7 @@ def execute_graph(
         def execute(state: ExecutionState, *, current: str = step) -> ExecutionState:
             nonlocal last_invoked
             blocked_by = state.get("blocked_by")
-            if blocked_by is not None:
+            if blocked_by is not None and current not in independent:
                 result = dependency_hold(
                     current, blocked_by,
                     read_only=blocked_context(current) if blocked_context else None,
