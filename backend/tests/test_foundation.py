@@ -205,9 +205,9 @@ def test_workspace_onboarding_and_lifecycle(client):
 
     base = "/api/workspace"
     headers = csrf(login("reviewer", PASSWORD))
-    assert client.post(f"{base}/projects", headers=headers, json={"name": "Test", "code": "T"}).status_code == 403
+    assert client.post(f"{base}/projects", headers=headers, json={"name": "Test", "code": "T", "policy_family": "session"}).status_code == 403
     headers = csrf(login("admin", PASSWORD))
-    created = client.post(f"{base}/projects", headers=headers, json={"name": "Test", "code": "T"})
+    created = client.post(f"{base}/projects", headers=headers, json={"name": "Test", "code": "T", "policy_family": "session"})
     assert created.status_code == 201
     identifier = created.json()["id"]
     project = f"{base}/projects/{identifier}"
