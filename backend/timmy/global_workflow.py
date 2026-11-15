@@ -239,8 +239,18 @@ def run_global_workflow(db, principal, config, conversation, documents, *, workf
                 return step_result(step,'blocked' if missing or not structural['activities'] else 'completed',
                     ['REPORT_VALIDATION_EVIDENCE_REQUIRED'] if missing or not structural['activities'] else [],missing_activities=missing)
             if step=='select_timesheets':
-                return step_result(step,'completed' if reviewed('staff') else 'needs_review',
-                    [] if reviewed('staff') else ['STAFF_VERIFICATION_REQUIRED'])
+                # Inspect staff evidence independently, but never claim eligible
+                # selection before planning and reporting authority are complete.
+                prerequisites=[]
+                if not reviewed('staff'):
+                    prerequisites.append('STAFF_VERIFICATION_REQUIRED')
+                if not reviewed('planning'):
+                    prerequisites.append('PLANNING_APPROVAL_EVIDENCE_REQUIRED')
+                if any((project_id,project['project_code'],a['activity_code']) not in cutoffs
+                       for a in structural['activities'] if a['activity_code'] not in excluded_activities(finding_rows)):
+                    prerequisites.append('REPORT_VALIDATION_EVIDENCE_REQUIRED')
+                return step_result(step,'needs_review' if prerequisites else 'completed',prerequisites,
+                    evidence_inspection='completed',eligible_selection='pending_authority' if prerequisites else 'verified')
             if step=='validate_activity':
                 # Only an undecided flag blocks; an explicit exclusion removes the
                 # affected records instead of releasing them.
@@ -281,6 +291,9 @@ def run_global_workflow(db, principal, config, conversation, documents, *, workf
 
         results = execute_graph(
             definitions[workflow_id].steps, evaluate,
+            # These two handlers only inspect already-loaded evidence. Continue
+            # them during planning review; keep validation/payment dependent.
+            independent_steps=('check_reports', 'select_timesheets'),
             on_result=(lambda receipt: on_step(
                 f"Project {project_id}: {receipt['step']} — {receipt['status']}" +
                 (' (not executed; dependency hold)' if receipt.get('attempted') is False else ''))
