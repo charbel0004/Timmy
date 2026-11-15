@@ -340,6 +340,7 @@ export function Assistant({ conversation, append, canReadProjects, csrfToken, on
           const knownIds = new Set(messages.map((message) => message.id));
           append(conversation.id, ...persistedMessages.filter((message) => !knownIds.has(message.id)));
         }} />}
+      {!!workflow?.project_runs?.some(run=>run.validation_id) && <section className="report-register-panel"><h2>Planning and staff evidence reviews</h2><p>Open each saved project review, inspect the evidence, and record an authorized decision. Source mapping and report provenance do not replace these decisions.</p>{workflow.project_runs.filter(run=>run.validation_id).map(run=><p key={run.project_id}><a href={`#imports/validation/${run.validation_id}`}>Review project {run.project_id} planning and staff evidence →</a></p>)}</section>}
       <GlobalMappings conversation={conversation?.id} csrf={csrfToken} canConfirm={canConfirmReports} revision={messages.length+documents.length} onResumed={refreshAfterEvidence} />
       <ReportingRegisterPanel onResumed={refreshAfterEvidence} conversation={conversation?.id} csrf={csrfToken} canDesignate={canDesignateReports} canConfirm={canConfirmReports} revision={messages.length+documents.length} />
       <WorkflowFindings conversation={conversation?.id} csrf={csrfToken} permissions={projectPermissions} revision={messages.length+documents.length} onResumed={refreshAfterEvidence} />

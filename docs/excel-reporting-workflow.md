@@ -108,3 +108,36 @@ Only ambiguous, duplicated, missing or unsupported header mappings are presented
 for human confirmation. Automatic matches are audited
 (`global_mapping_auto_confirmed`) and remain correctable by an authorized human;
 a correction re-records the mapping before any calculation uses it.
+
+Planning code-format review now starts with a deterministic proposal from confirmed
+planning columns. It displays project name/acronym, original activity codes,
+workbook/sheet/physical row and original SHA-256. The proposal infers only a bounded
+numeric suffix format when observed codes share one shape. Missing/inconsistent
+codes require correction; nothing is invented or approved from workbook labels.
+An administrator explicitly confirms the proposal; the API rechecks original bytes,
+source fingerprint, project attribution and that the format covers every observed
+planning code before resuming. Manual edits are available as an exception.
+
+Import history now derives mapping status from saved actor/conversation/project
+proposals, displays data rows separately from legacy header-inclusive totals, and
+shows source conversation, upload time, immutable file ID and hash. Repeated uploads
+remain separate originals; history is not silently deleted or merged.
+
+The Evidence Review page loads the current actor's saved validations for accessible
+projects directly. Chat receipts include links to their exact validation snapshots.
+Review forms are expanded and explicitly explain missing planning.verify or
+staff.verify grants; administrator status still grants neither permission by default.
+
+A corrected November happy-path fixture preserves exact ISO clock timestamps at
+the XLSX interchange boundary, avoiding the generated 15:49:59.999 export defect.
+The hourly engine still rejects fractional-minute input; no source rounding or
+automatic evidence approval has been added. Upload the corrected set in a fresh
+conversation rather than combining old and corrected claim sheets.
+
+HOURS review scope is limited to activities in the current conversation's hourly
+claims, including malformed rows needing review. Historical registry activities
+and unrelated report cutoffs neither create additional review requirements nor
+invalidate the current review snapshot. Review fingerprint v3 separates corrected
+snapshots from older broad-scope receipts; originals and prior decisions remain.
+Deleting a conversation referenced by retained evidence/payment snapshots returns
+a clear 409 conflict and preserves history rather than triggering a server error.

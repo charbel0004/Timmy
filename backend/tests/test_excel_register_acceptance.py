@@ -47,9 +47,15 @@ def load(coordinator,suite):
     reply=c.post(f'/api/chat/conversations/{conv}/messages',headers=h,json={'message':'Process the documents and give me a final payment request.','request_id':str(uuid4())})
     assert reply.status_code==200,reply.text
     mapping=c.get(f'/api/global-mappings/{conv}').json()
+    # These fixtures have unambiguous headers, so processing applies the mapping
+    # without asking; the explicit confirmation below exercises the human path.
+    assert mapping['errors']==[] and mapping['confirmed'] is True and mapping['automatic'] is True
     confirmed=c.post(f'/api/global-mappings/{conv}/confirm',headers=h,json={'fingerprint':mapping['fingerprint'],
         'sheets':[{k:s[k] for k in ('file_id','sheet_index','kind','columns')} for s in mapping['sheets']]})
     assert confirmed.status_code==200,confirmed.text
+    imports=c.get('/api/documents',params={'conversation_id':conv}).json()
+    assert len(imports)==4 and all(item['status']=='MAPPING_CONFIRMED' for item in imports)
+    assert all(item['data_rows']<item['rows'] and item['conversation_id']==conv for item in imports)
     return files
 
 
@@ -70,6 +76,7 @@ def declare(coordinator):
 def review(coordinator):
     c,h,conv=coordinator
     state=c.get(f'/api/chat/conversations/{conv}/workflow').json()
+    assert all(run['validation_id'] for run in state['project_runs'])
     with Session(c.app.state.engine) as db:
         runs=list(db.scalars(select(WorkflowRun).where(WorkflowRun.actor_id==120).order_by(WorkflowRun.id.desc())))
         latest={}
@@ -86,9 +93,10 @@ def review(coordinator):
                 assert response.status_code==200,response.text
 
 
-def test_happy_path_reaches_exact_human_payment_approval_without_intermediate_process_commands(coordinator):
+@pytest.mark.parametrize('suite',['01_Happy_Path','04_November_Happy_Path'])
+def test_happy_path_reaches_exact_human_payment_approval_without_intermediate_process_commands(coordinator,suite):
     c,h,conv=coordinator
-    load(coordinator,'01_Happy_Path')
+    load(coordinator,suite)
     declaration=declare(coordinator)
     assert declaration['assurance']=='coordinator_declared_not_independently_authenticated'
     assert all(r['accepted'] for r in declaration['evaluation']['rows'])
@@ -205,3 +213,73 @@ def test_rule_version_change_invalidates_payment_approval(coordinator,monkeypatc
         json={'digest':draft['digest'],'approve_exact_snapshot':True})
     assert refused.status_code==409 and 'rule version changed' in refused.text
     with Session(c.app.state.engine) as db:assert not list(db.scalars(select(WorkflowPaymentApproval)))
+
+
+def test_planning_format_proposals_use_original_project_rows_and_require_human_confirmation(coordinator):
+    from sqlalchemy import delete
+    c,h,conv=coordinator
+    with Session(c.app.state.engine) as db,db.begin():db.execute(delete(PlanningCodeContract))
+    load(coordinator,'01_Happy_Path')
+    state=c.get(f'/api/global-mappings/{conv}').json()
+    proposals=state['contract_candidates']
+    assert {p['project_code']:p['code_pattern'] for p in proposals}=={'TCD':'26-TCD-[0-9]{3}','FOS':'26-FOS-[0-9]{3}'}
+    for p in proposals:
+        assert p['evidence'] and all(e['filename']=='planning.xlsx' and e['sheet']=='Activities' and e['row']>=2 for e in p['evidence'])
+        assert p['sample_code'].startswith('26-'+p['project_code']+'-')
+    p=proposals[0]
+    body={k:p[k] for k in ('version','code_pattern','sample_code','source_ref')}
+    body.update(conversation_id=conv,source_fingerprint=state['fingerprint'],approved_source_format=False)
+    assert c.post(f'/api/global-mappings/contracts/{p["project_id"]}',headers=h,json=body).status_code==422
+    body.update(approved_source_format=True,sample_code=p['project_code'])
+    assert c.post(f'/api/global-mappings/contracts/{p["project_id"]}',headers=h,json=body).status_code==422
+    body.update(sample_code=p['sample_code'],source_fingerprint='0'*64)
+    assert c.post(f'/api/global-mappings/contracts/{p["project_id"]}',headers=h,json=body).status_code==409
+    with Session(c.app.state.engine) as db:assert not list(db.scalars(select(PlanningCodeContract)))
+
+
+def test_import_history_shows_new_mapping_review_instead_of_old_confirmation(coordinator):
+    from timmy.models import MappingProposal
+    c,h,conv=coordinator
+    load(coordinator,'01_Happy_Path')
+    with Session(c.app.state.engine) as db,db.begin():
+        previous=db.scalar(select(MappingProposal).where(MappingProposal.conversation_id==conv))
+        db.add(MappingProposal(id='00000000-0000-0000-0000-000000000000',conversation_id=conv,
+            actor_id=120,project_id=previous.project_id,fingerprint='changed-scope',
+            version=previous.version+100,sheets=previous.sheets,created_at=previous.created_at+1,status='proposed'))
+    items=c.get('/api/documents',params={'conversation_id':conv}).json()
+    assert all(item['status']=='PARSED_MAPPING_REQUIRED' for item in items)
+
+
+def test_hours_review_does_not_require_unrelated_historical_activity(coordinator):
+    from timmy.models import activities,StructuralValidation
+    c,h,conv=coordinator
+    with Session(c.app.state.engine) as db,db.begin():
+        db.execute(insert(activities).values(id=999,project_id=2,name='Unrelated historical activity',
+            activity_code='26-FOS-999',code_authority='source_supplied',planned_start='2026-01-01',planned_end='2026-01-31'))
+    load(coordinator,'01_Happy_Path');declare(coordinator)
+    state=c.get(f'/api/chat/conversations/{conv}/workflow').json()
+    run=next(r for r in state['project_runs'] if r['project_id']==2)
+    validation=c.get(f'/api/documents/validation/{run["validation_id"]}').json()
+    assert [a['activity_code'] for a in validation['activities']]==['26-FOS-001']
+    review(coordinator)
+    assert len(c.get(f'/api/workflow-payments/conversations/{conv}').json())==2
+    with Session(c.app.state.engine) as db,db.begin():
+        db.execute(insert(activities).values(id=998,project_id=2,name='Another unrelated activity',
+            activity_code='26-FOS-998',code_authority='source_supplied',planned_start='2026-01-01',planned_end='2026-01-31'))
+    reply=c.post(f'/api/chat/conversations/{conv}/messages',headers=h,
+        json={'message':'Process the documents and prepare a final payment request.','request_id':str(uuid4())})
+    assert reply.status_code==200,reply.text
+    current=c.get(f'/api/chat/conversations/{conv}/workflow').json()
+    refreshed=next(r for r in current['project_runs'] if r['project_id']==2)
+    assert refreshed['validation_id']==run['validation_id']
+    assert refreshed['steps'][0]['status']=='completed'
+
+
+def test_deleting_conversation_with_payment_evidence_returns_conflict_without_losing_history(coordinator):
+    c,h,conv=coordinator;ready_draft(coordinator)
+    before=c.get(f'/api/chat/conversations/{conv}').json()
+    response=c.delete(f'/api/chat/conversations/{conv}',headers=h)
+    assert response.status_code==409,response.text
+    assert 'retained' in response.json()['detail']
+    assert c.get(f'/api/chat/conversations/{conv}').json()==before
+    assert c.get(f'/api/workflow-payments/conversations/{conv}').json()
