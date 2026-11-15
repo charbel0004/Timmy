@@ -24,6 +24,8 @@ from .models import (WorkflowPaymentDraft as Draft,WorkflowPaymentApproval as Ap
 from .session_compensation import session_compensation
 from .documents import resolve_documents,project_report_cutoffs
 from .global_mappings import fingerprint
+from .findings import (decisions_digest, digest_for_validation, excluded_activities,
+                       excluded_months, unresolved_codes)
 
 router=APIRouter(prefix='/api/workflow-payments')
 
@@ -36,7 +38,7 @@ def rules_digest(family):
     """Bind arithmetic AND eligibility/source adapters, not just the money rate."""
     from pathlib import Path
     common=('source_dates','column_mappings','global_source_views','planning_activities',
-            'reporting_register','documents','global_workflow','workflow_payments')
+            'reporting_register','documents','global_workflow','workflow_payments','findings')
     policy=('session_rules','session_preview','session_compensation') if family=='session' else ('fixed_hours_policy','hourly_preview')
     root=Path(__file__).parent
     return digest({name:sha256((root/(name+'.py')).read_bytes()).hexdigest()
@@ -56,19 +58,23 @@ def review_refs(db,validation):
 
 
 @instrument("payment.prepare_immutable_draft", "rule")
-def make_draft(db,principal,conversation,documents,project,proposal,validation,structural):
+def make_draft(db,principal,conversation,documents,project,proposal,validation,structural,findings_rows=()):
     principal.require('payments.view',project['project_id'])
     if validation is None:raise HTTPException(409,'Validation snapshot required')
+    unresolved=unresolved_codes(findings_rows)
+    if unresolved:raise HTTPException(409,'FLAG_DECISION_REQUIRED: '+', '.join(unresolved))
+    excluded=excluded_activities(findings_rows);excluded_hours=excluded_months(findings_rows)
+    eligible=[a for a in structural['activities'] if a['activity_code'] not in excluded]
     reviews=review_refs(db,validation)
     cutoffs=project_report_cutoffs(db,project['project_id'])
-    if not structural['activities'] or any((project['project_id'],a['project_code'],a['activity_code']) not in cutoffs for a in structural['activities']):
+    if not eligible or any((project['project_id'],a['project_code'],a['activity_code']) not in cutoffs for a in eligible):
         raise HTTPException(409,'REPORT_VALIDATION_EVIDENCE_REQUIRED')
-    if structural.get('policy_issues') or structural.get('hourly_parse_issues') or any(a.get('issues') for a in structural['activities']):
-        raise HTTPException(409,'UNRESOLVED_SOURCE_VALIDATION_FINDINGS')
     lines=[]; reservations=[]
     if project['policy_family']=='session':
         by_staff=defaultdict(list)
-        for claim in structural['claims']:by_staff[claim['staff_id']].append(claim)
+        for claim in structural['claims']:
+            if claim['activity_code'] in excluded:continue
+            by_staff[claim['staff_id']].append(claim)
         for staff,claims in sorted(by_staff.items()):
             keys=sorted({digest({k:c[k] for k in ('project_code','activity_code','staff_id','role','session','work_date')}) for c in claims})
             if len(keys)!=len(claims):raise HTTPException(409,'Duplicate financial source credit')
@@ -81,6 +87,8 @@ def make_draft(db,principal,conversation,documents,project,proposal,validation,s
                               currency='USD',source_credit_keys=keys[:used],remaining_credits=keys[used:],allocation=None))
     else:
         for candidate in structural.get('hourly_candidates',[]):
+            subject=f"{candidate['staff_id']}|{candidate['year']}-{candidate['month']:02d}"
+            if subject in excluded_hours:continue
             if candidate['blockers'] or candidate['amount_usd'] is None:raise HTTPException(409,'Unresolved hourly rules')
             if not candidate['payable_hours']:continue
             key=digest(dict(staff_id=candidate['staff_id'],project_code=candidate['project_code'],year=candidate['year'],month=candidate['month'],unit='hourly-month'))
@@ -92,6 +100,11 @@ def make_draft(db,principal,conversation,documents,project,proposal,validation,s
     snapshot=dict(rules_digest=rules_digest(project['policy_family']),report_provenance_assurance='coordinator_declared_not_independently_authenticated',project_id=project['project_id'],project_code=project['project_code'],policy_family=project['policy_family'],
         source_fingerprint=fingerprint(documents),source_ids=[f.id for f,_ in documents],mapping_id=proposal.id,
         validation_id=validation.id,review_ids=reviews,report_cutoffs=sorted((str(k),v) for k,v in project_report_cutoffs(db,project['project_id']).items()),
+        exclusions=dict(activities=sorted(excluded),hours_months=sorted(excluded_hours)),
+        findings_digest=decisions_digest(findings_rows),
+        decisions=[dict(id=row.id,code=row.code,scope=row.scope,subject=row.subject,state=row.state,
+                        decision=row.decision,decided_by=row.decided_by,evidence_ref=row.evidence_ref)
+                   for row in sorted(findings_rows,key=lambda row:(row.scope,row.subject,row.code))],
         lines=lines,reservation_keys=sorted(reservations),settlement='external_not_executed')
     original=store(db,principal.user.id,conversation.id,project['project_id'],snapshot)
     for configured in db.scalars(select(Draft).where(Draft.actor_id==principal.user.id,Draft.conversation_id==conversation.id,
@@ -134,6 +147,8 @@ def fresh(db,principal,config,item):
     if proposal is None or proposal.status!='confirmed':raise HTTPException(409,'Confirmed mapping required')
     validation=db.get(StructuralValidation,item.snapshot['validation_id'])
     if validation is None or review_refs(db,validation)!=item.snapshot['review_ids']:raise HTTPException(409,'STALE_FINANCIAL_SNAPSHOT: human reviews changed')
+    if item.snapshot.get('findings_digest')!=digest_for_validation(db,validation.id,item.conversation_id):
+        raise HTTPException(409,'STALE_FINANCIAL_SNAPSHOT: flag decisions changed; reprocess')
     current=sorted((str(k),v) for k,v in project_report_cutoffs(db,item.project_id).items())
     # JSON round trips turn tuples into arrays.
     if json.loads(json.dumps(current))!=item.snapshot['report_cutoffs']:raise HTTPException(409,'STALE_FINANCIAL_SNAPSHOT: report authority changed')

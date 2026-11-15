@@ -13,6 +13,7 @@ from .auth import current_principal, Authenticated, Database
 import re
 
 from .workflow_payments import router as workflow_payments_router
+from .findings import router as findings_router
 from .global_mappings import router as global_mappings_router
 from .reporting_register import router as reporting_register_router
 from .payment_configuration import router as payment_policy_router
@@ -127,6 +128,7 @@ def create_app(config: Settings | None = None) -> FastAPI:
         return overview_data(principal, db)
 
     app.include_router(workflow_payments_router)
+    app.include_router(findings_router)
     app.include_router(global_mappings_router)
     app.include_router(reporting_register_router)
     app.include_router(telemetry_router)

@@ -1,7 +1,7 @@
 """Explicit contracts for every declared workflow step; absence is never success."""
 CONTRACTS = {
  'verify_intake': ('Original files, access and checksum', 'Verified source receipt', 'Upload accessible originals', 'available'),
- 'check_planning': ('Confirmed mapping, source-issued activity code, approved code contract, planning evidence', 'Verified planning receipt', 'Confirm project mappings; register source activities; obtain planning.verify review', 'guarded_handler_available'),
+ 'check_planning': ('Automatically matched high-confidence mapping or human-confirmed mapping, source-issued activity code, approved code contract, planning evidence', 'Verified planning receipt', 'Apply high-confidence header mappings automatically, confirm only ambiguous mappings, register source activities, obtain planning.verify review', 'guarded_handler_available'),
  'check_reports': ('Registered activity, approved Excel register designation, declared provenance and sufficient consistent validation evidence', 'Frozen cutoff with coordinator-declared provenance recorded explicitly', 'Designate the reporting register, confirm its mapping and official-export declaration in chat, and resolve report evidence findings', 'designated_excel_register_and_provenance_required'),
  'select_timesheets': ('Verified planning, staff and report receipts', 'Source-linked eligible claim selection', 'Complete each evidence review before selecting eligible claims', 'guarded_handler_available'),
  'validate_activity': ('Eligible claims and applicable fixed project policy', 'Deterministic rule outcomes and immutable source references', 'Execute session coverage or hourly rules on verified claims; resolve ambiguous source values', 'guarded_handler_available'),

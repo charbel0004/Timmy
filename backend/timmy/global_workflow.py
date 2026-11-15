@@ -21,6 +21,8 @@ from .global_source_views import preview_documents_for_project
 from .session_preview import preview
 from .planning_activities import registry
 from .documents import project_report_cutoffs
+from .findings import (BLOCKING_STATES, excluded_activities, sync as sync_findings,
+                       unresolved_codes)
 from .workflow_graph import execute_graph
 from .workflows import knowledge, step_result
 
@@ -53,7 +55,14 @@ def run_global_workflow(db, principal, config, conversation, documents, *, workf
     mapping_by_project={p.project_id:p for p in proposals(db,principal,conversation,documents,project_ids,
         create=workflow_id in {'process_activity','weekly_cycle','prepare_payment'})}
     note = render_project_discovery(overview, workflow_receipts=True)
-    report = [note, "\n### Actual project-specific workflow receipts"]
+    report = [note]
+    advanced = False
+    automatic = sorted(p.project_id for p in mapping_by_project.values()
+                       if p.status == 'confirmed' and p.confirmed_by is None)
+    if automatic:
+        report.append("Source sheets were classified and their columns mapped automatically at high "
+                      f"confidence for project(s) {', '.join(map(str, automatic))}; no mapping review was required.")
+    report.append("\n### Actual project-specific workflow receipts")
     for project_id in sorted(project_ids):
         principal.require("timesheets.view", project_id)
         if db.scalar(select(projects.c.status).where(projects.c.id == project_id)) != "active":
@@ -165,6 +174,10 @@ def run_global_workflow(db, principal, config, conversation, documents, *, workf
                 validation=StructuralValidation(project_id=project_id,actor_id=principal.user.id,
                     fingerprint=validation_key,created_at=int(time()),snapshot=structural)
                 db.add(validation);db.flush()
+        finding_rows=[]
+        if confirmed and validation is not None:
+            finding_rows=sync_findings(db,project_id=project_id,conversation_id=conversation.id,
+                validation=validation,structural=structural,project_code=project['project_code'],cutoffs=cutoffs)
         def reviewed(kind):
             if validation is None:return False
             from .models import EvidenceReview
@@ -219,30 +232,31 @@ def run_global_workflow(db, principal, config, conversation, documents, *, workf
                     [] if reviewed('planning') else ['PLANNING_APPROVAL_EVIDENCE_REQUIRED'],
                     validation_id=validation.id if validation else None)
             if step=='check_reports':
+                excluded=excluded_activities(finding_rows)
                 missing=[a['activity_code'] for a in structural['activities']
-                         if (project_id,project['project_code'],a['activity_code']) not in cutoffs]
+                         if a['activity_code'] not in excluded
+                         and (project_id,project['project_code'],a['activity_code']) not in cutoffs]
                 return step_result(step,'blocked' if missing or not structural['activities'] else 'completed',
                     ['REPORT_VALIDATION_EVIDENCE_REQUIRED'] if missing or not structural['activities'] else [],missing_activities=missing)
             if step=='select_timesheets':
                 return step_result(step,'completed' if reviewed('staff') else 'needs_review',
                     [] if reviewed('staff') else ['STAFF_VERIFICATION_REQUIRED'])
             if step=='validate_activity':
-                issues=sorted({code for a in structural['activities'] for code in a.get('issues',{})})
-                issues+=list(structural.get('hourly_parse_issues',[]))
-                issues+=structural.get('policy_issues',[])
-                issues+=sorted({code for c in structural.get('hourly_candidates',[]) for code in c['blockers']})
+                # Only an undecided flag blocks; an explicit exclusion removes the
+                # affected records instead of releasing them.
+                issues=unresolved_codes(finding_rows)
                 return step_result(step,'needs_review' if issues else 'completed',issues,
                     validation_id=validation.id if validation else None)
             if step=='resolve_discrepancies':
                 # This goal can be invoked alone, so graph ordering is not proof
                 # that validation or its human prerequisites already passed.
-                findings=sorted(finding_codes | set(structural.get('hourly_parse_issues',[])) |
-                    {code for c in structural.get('hourly_candidates',[]) for code in c['blockers']})
+                findings=unresolved_codes(finding_rows)
+                excluded=excluded_activities(finding_rows)
                 missing_reports=any((project_id,project['project_code'],a['activity_code']) not in cutoffs
-                                    for a in structural['activities'])
+                                    for a in structural['activities'] if a['activity_code'] not in excluded)
                 if findings:
                     return step_result(step,'needs_review',findings,
-                        recommendation='Resolve the original source/evidence findings under approved policy and reprocess; no correction has been invented.')
+                        recommendation='Decide each recorded flag once; invalidated records are excluded from this payment request and nothing is invented.')
                 if registration_issue or not structural['activities'] or missing_reports or not reviewed('planning') or not reviewed('staff'):
                     return step_result(step,'needs_review',['VERIFIED_ACTIVITY_EVIDENCE_REQUIRED'],
                         recommendation='Complete planning, staff and report evidence reviews before recording resolution.')
@@ -250,7 +264,8 @@ def run_global_workflow(db, principal, config, conversation, documents, *, workf
             if step=='prepare_payment_request':
                 from .workflow_payments import make_draft
                 try:
-                    payment_draft=make_draft(db,principal,conversation,documents,project,proposal,validation,structural)
+                    payment_draft=make_draft(db,principal,conversation,documents,project,proposal,validation,structural,
+                                             findings_rows=finding_rows)
                 except HTTPException as error:
                     return step_result(step,'blocked',['PAYMENT_DRAFT_REVIEW_REQUIRED'],recommendation=str(error.detail))
                 return step_result(step,'completed',[],draft_id=payment_draft.id,digest=payment_draft.digest)
@@ -292,6 +307,8 @@ def run_global_workflow(db, principal, config, conversation, documents, *, workf
                 "mapping_authority": "confirmed" if confirmed else "unconfirmed",
                 "mapping_id":proposal.id if proposal else None,
                 "structural_validation_id":validation.id if validation else None,
+                "flag_decisions": [{"id": row.id, "code": row.code, "scope": row.scope,
+                                    "subject": row.subject, "state": row.state} for row in finding_rows],
                 "payment_authority": payment_authority,
                 "provisional_structural_preview": provisional,
                 "execution": {"mode": "synchronous",
@@ -308,10 +325,18 @@ def run_global_workflow(db, principal, config, conversation, documents, *, workf
                 issue_codes=result["issue_codes"], recorded_at=int(time()),
             ))
         db.flush()
+        advanced = advanced or any(result['status'] == 'completed' and result['step'] not in {
+            'verify_intake', 'show_discrepancies'} for result in results)
         audit(db, "workflow_run_recorded", principal.user.id,
               resource_type="workflow_run", resource_id=str(run.id),
               outcome=status, trigger=workflow_id)
         report.append(f"- Project {project_id}: {workflow_id} run #{run.id} — {status}.")
+        if finding_rows:
+            open_flags=[row for row in finding_rows if row.state in BLOCKING_STATES]
+            report.append(f'  Flag decision round: {len(open_flags)} open of {len(finding_rows)} '
+                          'recorded findings for this snapshot.')
+            report.append('  Decide each flag once in the Flag decisions panel; an invalidated record is '
+                          'excluded from the payment request, never paid.')
         if structural['resolution_recommendations']:
             report.append('  Resolution recommendations (no unauthorized correction applied):')
             for code,recommendation in structural['resolution_recommendations'].items():
@@ -333,7 +358,7 @@ def run_global_workflow(db, principal, config, conversation, documents, *, workf
                              if result["issue_codes"] else ""))
             if result.get('recommendation'):
                 report.append('    Next: '+result['recommendation'])
-    if not any(p.status=='confirmed' for p in mapping_by_project.values()):
+    if not advanced:
         report.append("No cross-project source registration, identity confirmation, report validation, payment eligibility, export or settlement was performed.")
     else:
         report.append("Original sources and evidence decisions are preserved. Only completed receipts above establish progress; actual payment transfers and settlement remain external.")

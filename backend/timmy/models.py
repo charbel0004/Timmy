@@ -425,3 +425,25 @@ class WorkflowPaymentExport(Base):
     approval_id: Mapped[str] = mapped_column(ForeignKey('workflow_payment_approvals.id'))
     sha256: Mapped[str] = mapped_column(String(64))
     created_at: Mapped[int]
+
+
+class WorkflowFinding(Base):
+    """One end-of-run flag with its explicit human disposition."""
+    __tablename__ = 'workflow_findings'
+    __table_args__ = (UniqueConstraint('validation_id', 'conversation_id', 'scope', 'subject', 'code'),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey('projects.id'), index=True)
+    conversation_id: Mapped[str] = mapped_column(ForeignKey('conversations.id'))
+    validation_id: Mapped[int] = mapped_column(ForeignKey('structural_validations.id'), index=True)
+    scope: Mapped[str] = mapped_column(String(16))
+    subject: Mapped[str] = mapped_column(String(120))
+    code: Mapped[str] = mapped_column(String(80))
+    source_refs: Mapped[list] = mapped_column(JSON)
+    detail: Mapped[dict] = mapped_column(JSON)
+    state: Mapped[str] = mapped_column(String(32))
+    decision: Mapped[str | None] = mapped_column(String(24), default=None)
+    decided_by: Mapped[int | None] = mapped_column(ForeignKey('users.id'), default=None)
+    decided_at: Mapped[int | None] = mapped_column(default=None)
+    evidence_ref: Mapped[str | None] = mapped_column(Text, default=None)
+    note: Mapped[str | None] = mapped_column(Text, default=None)
+    created_at: Mapped[int]

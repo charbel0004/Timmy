@@ -74,14 +74,18 @@ def test_server_cannot_expose_live_dotenv_to_test_runner():
 
 def test_observability_migration_declaration_is_exactly_pinned():
     fields = (ROOT / 'ops/deploy/additive-migration').read_text().split()
-    assert fields[:2] == ['0019', '0020']
-    migration = 'backend/migrations/versions/0020_reporting_register.py'
+    assert fields[:2] == ['0020', '0021']
+    migration = 'backend/migrations/versions/0021_flag_decisions.py'
     assert fields[2] == migration and len(fields) == 4
     blob = subprocess.check_output(['git', 'hash-object', migration], cwd=ROOT, text=True).strip()
     assert fields[3] == blob
     changes = subprocess.check_output(['git', 'diff', '--name-status',
         'f203273f42b937eab8605445c89ecf759e0d6096', '--', 'backend/migrations'], cwd=ROOT, text=True).strip()
-    assert changes == 'A\t' + migration
+    # Only additive migrations may follow the active release; released files stay untouched.
+    added = [line.split('\t')[1] for line in changes.splitlines()]
+    assert all(line.startswith('A\t') for line in changes.splitlines())
+    assert set(added) <= {'backend/migrations/versions/0020_reporting_register.py', migration}
+    assert 'backend/migrations/versions/0020_reporting_register.py' in added
 
 
 def test_active_release_serves_expanded_observability_schema(tmp_path, client):

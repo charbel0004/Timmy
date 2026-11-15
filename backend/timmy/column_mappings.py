@@ -11,6 +11,13 @@ REQUIRED = {
     'projects': {'project_code','project_name'},
 }
 OPTIONAL = {'planning': {'activity_name','approval_status'}}
+# Columns that identify a document type on their own; the completeness ratios are
+# only a fallback for sheets whose required headers happen to describe one type.
+DISTINCTIVE = {
+    'hours': {'clock_in','clock_out'}, 'reports': {'report_id','validated_at','validation_status'},
+    'claims': {'session_number','work_date','role'}, 'planning': {'approved_start_date','approved_end_date'},
+    'projects': {'project_name'}, 'directory': set(),
+}
 ALIASES = {
     'project_code': {'project code'}, 'project_name': {'project name'},
     'activity_code': {'activity code','رمز النشاط'},
@@ -24,7 +31,7 @@ ALIASES = {
     'clock_in': {'clock in','ساعة الدخول'}, 'clock_out': {'clock out','ساعة الخروج'},
     'report_id': {'external report reference','report id'}, 'report_version': {'version','report version'},
     'submitted_at': {'submitted at'}, 'validation_status': {'validation status'},
-    'validated_at': {'validated at'}, 'evidence_ref': {'source evidence'},
+    'validated_at': {'validated at'}, 'evidence_ref': {'source evidence','evidence ref'},
 }
 
 
@@ -47,23 +54,30 @@ def propose_sheet(file, sheet, index):
     scores = {kind: len(required & fields.keys()) / len(required) for kind,required in REQUIRED.items()}
     # Distinctive columns beat completeness ratios: a partial timesheet must
     # not become a directory merely because staff_id is one of its two fields.
-    if {'clock_in', 'clock_out'} & fields.keys():
-        kind = 'hours'
-    elif {'report_id', 'validated_at', 'validation_status'} & fields.keys():
-        kind = 'reports'
-    elif {'session_number', 'work_date', 'role'} & fields.keys():
-        kind = 'claims'
-    elif {'approved_start_date', 'approved_end_date'} & fields.keys():
-        kind = 'planning'
-    elif 'project_name' in fields:
-        kind = 'projects'
+    basis = 'distinctive_headers'
+    distinctive = next((kind for kind, markers in DISTINCTIVE.items()
+                        if markers & fields.keys()), None)
+    if distinctive:
+        kind = distinctive
+    elif fields:
+        complete = [kind for kind, value in scores.items() if value == 1.0]
+        kind = max(scores, key=scores.get)
+        basis = 'complete_exact_headers' if complete == [kind] else 'partial_coverage'
     else:
-        kind = max(scores, key=scores.get) if fields else 'unsupported'
+        kind, basis = 'unsupported', 'no_recognized_headers'
     if kind != 'unsupported':
         fields = {k:v for k,v in fields.items() if k in REQUIRED[kind] | OPTIONAL.get(kind,set())}
+    # High confidence means: the document type was identified by its own
+    # signature (or an exact, unique required-header fit), every required
+    # column was recognized exactly once, and no field matched twice. Only then
+    # may the mapping be applied without asking a human.
+    confident = bool(kind in REQUIRED and not conflicts
+                     and REQUIRED[kind] <= fields.keys()
+                     and basis in {'distinctive_headers', 'complete_exact_headers'})
     return {'file_id':file.id, 'filename':file.original_filename, 'sheet_index':index,
             'sheet_name':sheet['name'], 'kind':kind, 'header_row':rows[0]['row'] if rows else None,
             'headers':headers, 'columns':fields, 'conflicts':conflicts,
+            'confidence': 'high' if confident else 'review_required', 'confidence_basis': basis,
             'source_rows':len(rows)}
 
 

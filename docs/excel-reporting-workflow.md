@@ -97,6 +97,18 @@ is not a payment-return register and cannot mark obligations settled. Those
 legacy reconciliation adapters remain explicitly gated pending an approved
 finance-return contract; they are not represented as completed by this work.
 
+## Automatic high-confidence header mapping
+
+The agent classifies each sheet as planning, report, claim, hourly claim, staff
+directory or project list from its own header signature. When the document type
+is identified by distinctive headers (or an exact, unique required-header fit),
+every required column is recognized exactly once and no field matches twice, the
+mapping is applied automatically and the conversation continues without asking.
+Only ambiguous, duplicated, missing or unsupported header mappings are presented
+for human confirmation. Automatic matches are audited
+(`global_mapping_auto_confirmed`) and remain correctable by an authorized human;
+a correction re-records the mapping before any calculation uses it.
+
 Planning code-format review now starts with a deterministic proposal from confirmed
 planning columns. It displays project name/acronym, original activity codes,
 workbook/sheet/physical row and original SHA-256. The proposal infers only a bounded

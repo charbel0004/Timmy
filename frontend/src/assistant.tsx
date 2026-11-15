@@ -1,6 +1,7 @@
 import { WorkflowPayments } from "./workflow-payments";
 import { GlobalMappings } from "./global-mappings";
 import { ReportingRegisterPanel } from "./reporting-register";
+import { WorkflowFindings } from "./workflow-findings";
 import { createRequestId } from "./request-id";
 import { ExecutionTimeline } from "./observatory";
 import remarkGfm from "remark-gfm";
@@ -342,6 +343,7 @@ export function Assistant({ conversation, append, canReadProjects, csrfToken, on
       {!!workflow?.project_runs?.some(run=>run.validation_id) && <section className="report-register-panel"><h2>Planning and staff evidence reviews</h2><p>Open each saved project review, inspect the evidence, and record an authorized decision. Source mapping and report provenance do not replace these decisions.</p>{workflow.project_runs.filter(run=>run.validation_id).map(run=><p key={run.project_id}><a href={`#imports/validation/${run.validation_id}`}>Review project {run.project_id} planning and staff evidence →</a></p>)}</section>}
       <GlobalMappings conversation={conversation?.id} csrf={csrfToken} canConfirm={canConfirmReports} revision={messages.length+documents.length} onResumed={refreshAfterEvidence} />
       <ReportingRegisterPanel onResumed={refreshAfterEvidence} conversation={conversation?.id} csrf={csrfToken} canDesignate={canDesignateReports} canConfirm={canConfirmReports} revision={messages.length+documents.length} />
+      <WorkflowFindings conversation={conversation?.id} csrf={csrfToken} permissions={projectPermissions} revision={messages.length+documents.length} onResumed={refreshAfterEvidence} />
       <WorkflowPayments conversation={conversation?.id} csrf={csrfToken} permissions={projectPermissions} revision={messages.length+documents.length} onResumed={refreshAfterEvidence} />
       <form className="chat-composer" onSubmit={submit}>
         <p className="muted"><Badge tone="cyan">Guarded operations</Badge> {projectScope ? "Attachments are limited to the selected project's conversation files." : "Timmy matches this conversation's source rows by approved project and activity codes; no project selection is needed."}</p>

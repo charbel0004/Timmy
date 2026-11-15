@@ -16,6 +16,8 @@ def make_engine(url: str):
     def configure_sqlite(connection, _record):
         cursor = connection.cursor()
         cursor.execute("PRAGMA foreign_keys=ON")
+        # Serialise concurrent writers instead of failing a workflow mid-resume.
+        cursor.execute("PRAGMA busy_timeout=30000")
         cursor.close()
 
     return engine

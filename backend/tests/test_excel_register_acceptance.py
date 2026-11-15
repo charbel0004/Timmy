@@ -46,8 +46,10 @@ def load(coordinator,suite):
         files[path.name]=response.json()
     reply=c.post(f'/api/chat/conversations/{conv}/messages',headers=h,json={'message':'Process the documents and give me a final payment request.','request_id':str(uuid4())})
     assert reply.status_code==200,reply.text
-    assert all(item['status']=='PARSED_MAPPING_REQUIRED' for item in c.get('/api/documents',params={'conversation_id':conv}).json())
     mapping=c.get(f'/api/global-mappings/{conv}').json()
+    # These fixtures have unambiguous headers, so processing applies the mapping
+    # without asking; the explicit confirmation below exercises the human path.
+    assert mapping['errors']==[] and mapping['confirmed'] is True and mapping['automatic'] is True
     confirmed=c.post(f'/api/global-mappings/{conv}/confirm',headers=h,json={'fingerprint':mapping['fingerprint'],
         'sheets':[{k:s[k] for k in ('file_id','sheet_index','kind','columns')} for s in mapping['sheets']]})
     assert confirmed.status_code==200,confirmed.text
