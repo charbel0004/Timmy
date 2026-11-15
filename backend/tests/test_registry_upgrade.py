@@ -66,7 +66,8 @@ def test_populated_main_upgrade_preserves_original_evidence(tmp_path, monkeypatc
                 quoted = ','.join(f'"{col}"' for col in cols)
                 assert db.execute(f'SELECT {quoted} FROM "{name}"').fetchall() == rows, name
             assert db.execute('SELECT code_authority FROM activities').fetchone() == ('legacy_review_required',)
-            assert db.execute('SELECT version_num FROM alembic_version').fetchone() == ('0017',)
+            assert db.execute('SELECT policy_family FROM projects').fetchone() == (None,)
+            assert db.execute('SELECT version_num FROM alembic_version').fetchone() == ('0018',)
     finally:
         engine.dispose()
         settings.cache_clear()
