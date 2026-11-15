@@ -273,13 +273,14 @@ async def answer(conversation_id, payload, request, principal, db, identifier, r
         arabic = any("\u0600" <= character <= "\u06ff" for character in payload.message)
         if not documents:
             return "لا توجد ملفات متاحة في هذه المحادثة." if arabic else "No accessible spreadsheets were found in this conversation. Attach CSV or XLSX files to analyze."
+        discovery = ""
         if multi_project_documents:
             check_integrity(config, documents)
             record("Matched source projects across available project context")
-            return render_project_discovery(discover_projects(db, actor, documents))
+            discovery = render_project_discovery(discover_projects(db, actor, documents)) + "\n"
         import re
 
-        if re.search(r"session|validate|eligib|payment policy|الجلسات|تحقق", payload.message, re.I):
+        if not multi_project_documents and re.search(r"session|validate|eligib|payment policy|الجلسات|تحقق", payload.message, re.I):
             cutoffs = {}
             cutoffs_ids = {file.project_id for file, _ in documents}
             for project in sorted(cutoffs_ids):
@@ -303,7 +304,7 @@ async def answer(conversation_id, payload, request, principal, db, identifier, r
             "session number": "رقم الجلسة", "work date": "تاريخ العمل",
             "submission date": "تاريخ التقديم", "role": "الدور",
         }
-        lines = [pending]
+        lines = [discovery + pending]
         for file, spreadsheet in documents:
             # Escape filename punctuation before embedding it in Markdown.
             filename = "".join(
