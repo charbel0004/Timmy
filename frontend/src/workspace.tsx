@@ -110,12 +110,10 @@ export function Administration({ page, session }: {
       {notice && <p role="status">{notice}</p>}
       {creating && <Dialog title="New project" close={() => { if (!busy) setCreating(false); }}>
         <form className="admin-form" onSubmit={(event) => submit(event, (fields) =>
-          void save("/projects", "POST", { name: fields.get("name"), code: fields.get("code"), status: fields.get("status"),
+          void save("/projects", "POST", { name: fields.get("name"), code: fields.get("code"),
             policy_family: fields.get("policy_family") }))}>
           <div className="iam-fields"><label>Project name<input name="name" required maxLength={160} /></label>
-            <label>Project code<input name="code" required maxLength={80} /></label></div>
-          <label>Initial status<select name="status"><option value="active">Active</option><option value="draft">Draft</option></select></label>
-          <p className="muted">Active projects appear in workspace selection. Drafts stay here until activated.</p>
+            <label>Project acronym<input name="code" required maxLength={80} /></label></div>
           <label>Payment policy<select name="policy_family" required defaultValue="">
             <option value="" disabled>Select policy type</option>
             <option value="session">Session-based</option>
