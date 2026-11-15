@@ -76,13 +76,9 @@ def discover_projects(db, principal, documents):
                         candidates.update(matches)
                 if activity_code and activity_code in activity_map:
                     candidates.add(activity_map[activity_code])
-                if file.project_id is not None:
-                    if file.project_id not in by_id:
-                        issues.add('FILE_PROJECT_ACCESS_REVOKED')
-                    elif candidates and file.project_id not in candidates:
-                        issues.add('FILE_PROJECT_CONFLICT')
-                    else:
-                        candidates.add(file.project_id)
+                # A historical file.project_id is a storage/permission association,
+                # NOT evidence that every row belongs to that project. One workbook
+                # can legitimately contain records for multiple projects.
                 if len(candidates) > 1:
                     issues.add('CONFLICTING_PROJECT_EVIDENCE')
                 if not candidates:
