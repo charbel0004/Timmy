@@ -1,3 +1,4 @@
+import avatarUrl from "./assets/timmy-avatar.webp";
 import { useState } from "react";
 import type { ReactNode } from "react";
 import { Activity, BarChart3, RefreshCw, ArrowRightFromLine, CalendarClock, Calculator, Check, ChevronUp, CircleAlert, ClipboardList, Folder, LayoutGrid, MessageCircle, Settings2, ShieldCheck, Sparkles, Upload, Wallet } from "lucide-react";
@@ -26,7 +27,7 @@ export function Badge({ children, tone = "neutral" }: {
 export function AgentAvatar({ className = "", size = 36 }: { className?: string; size?: number }) {
   const [unavailable, setUnavailable] = useState(false);
   return unavailable ? <Sparkles className={className} size={size} aria-hidden="true" />
-    : <img src="/assets/timmy-avatar.webp" className={`agent-avatar ${className}`} width={size} height={size}
+    : <img src={avatarUrl} className={`agent-avatar ${className}`} width={size} height={size}
         alt="" onError={() => setUnavailable(true)} />;
 }
 
