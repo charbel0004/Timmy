@@ -50,7 +50,7 @@ def test_project_requires_one_fixed_family_and_rejects_configurable_values(clien
         assert client.post(f"/api/payment-policies/{identifier}", headers=headers,
                            json={"rate": "100"}).status_code == 405
         assert client.post(f"/api/payment-policies/{identifier}/example", headers=headers,
-                           json={"rate": "100"}).status_code == 405
+                           json={"rate": "100"}).status_code == 404
         with Session(client.app.state.engine) as db:
             assert db.scalar(select(projects.c.policy_family).where(projects.c.id == identifier)) == family
             assert db.scalar(select(payment_policies.c.id).where(
