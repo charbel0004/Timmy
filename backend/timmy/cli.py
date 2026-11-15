@@ -1,7 +1,7 @@
 import argparse
 from getpass import getpass
 
-from sqlalchemy import insert, select
+from sqlalchemy import insert, select, update
 from sqlalchemy.orm import Session
 
 from .audit import audit
@@ -42,9 +42,13 @@ def main():
         if args.demo_projects:
             for number in range(1, 4):
                 name = f"Demo — Project {number}"
+                # Intake rejects source rows without the project code, so seeded projects need one.
+                code = f"DEMO{number}"
                 project_id = db.scalar(select(projects.c.id).where(projects.c.name == name))
                 if project_id is None:
-                    project_id = db.execute(insert(projects).values(name=name)).inserted_primary_key[0]
+                    project_id = db.execute(insert(projects).values(name=name, project_code=code)).inserted_primary_key[0]
+                else:
+                    db.execute(update(projects).where(projects.c.id == project_id, projects.c.project_code.is_(None)).values(project_code=code))
                 db.execute(insert(project_memberships).values(project_id=project_id, user_id=user.id))
         audit(db, "local_account_created")
     print("Account created.")

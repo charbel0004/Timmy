@@ -15,7 +15,7 @@ from .ai import OllamaAdapter, OllamaExtractionError, build_ollama_client
 from .audit import audit
 from .auth import Authenticated, Database, require_csrf
 from .chat import respond
-from .models import ChatTurn, Conversation, projects as project_table
+from .models import ChatTurn, Conversation, DocumentImport, StoredFile, projects as project_table
 from .auth import current_principal
 from .demo_operations import records as demo_records, summary as demo_summary
 from .repositories import visible_projects
@@ -38,6 +38,16 @@ class SendMessage(BaseModel):
     message: str = Field(min_length=1, max_length=1500)
     project_id: int | None = Field(default=None, gt=0)
     document_ids: list[UUID] = Field(default_factory=list, max_length=20)
+
+
+def attached_sources(db: Database, identifier: str, project_id: int) -> list[str]:
+    """Files attached in this conversation for the selected project only."""
+    rows = db.execute(select(DocumentImport.file_id)
+                      .join(StoredFile, StoredFile.id == DocumentImport.file_id)
+                      .where(DocumentImport.conversation_id == identifier,
+                             StoredFile.project_id == project_id)
+                      .order_by(DocumentImport.file_id)).all()
+    return [str(row[0]) for row in rows]
 
 
 def owned(db: Database, principal: Authenticated, conversation_id: UUID) -> Conversation:
@@ -210,7 +220,12 @@ async def answer(conversation_id, payload, request, principal, db, identifier, r
     ))
     request_context = payload.model_dump(mode='json', exclude={'request_id'})
     saved_scope = (conversation.workflow_state or {}).get('scope', {})
-    inherited_scope = payload.project_id is None and not payload.document_ids
+    # A selected project limits this conversation to its own attachments, so an
+    # unrelated file from another conversation cannot block Process or mapping.
+    selected_ids = payload.document_ids
+    if payload.project_id is not None and not selected_ids:
+        selected_ids = attached_sources(db, identifier, payload.project_id)
+    inherited_scope = payload.project_id is None and not selected_ids
     # An existing single-project workflow must not shadow newly attached global
     # documents or make a chat permanently tied to an older selected project.
     current_documents = resolve_documents(db, principal, identifier, None, []) if inherited_scope else []
@@ -220,7 +235,7 @@ async def answer(conversation_id, payload, request, principal, db, identifier, r
     effective_project = (saved_scope.get('project_id') if inherited_scope and not global_sources
                          else payload.project_id)
     effective_ids = (saved_scope.get('source_ids', []) if inherited_scope and not global_sources
-                     else payload.document_ids)
+                     else selected_ids)
     documents = [] if policy_lookup else resolve_documents(db, principal, identifier, effective_project, effective_ids)
     source_ids = [file.id for file, _ in documents]
     multi_project_documents = bool(documents) and (
@@ -321,7 +336,7 @@ async def answer(conversation_id, payload, request, principal, db, identifier, r
         db.execute(text('BEGIN IMMEDIATE'))
         actor = current_principal(request, db)
         active_conversation = owned(db, actor, conversation_id)
-        available = resolve_documents(db, actor, identifier, payload.project_id, payload.document_ids)
+        available = resolve_documents(db, actor, identifier, payload.project_id, selected_ids)
         if any(file.project_id is None for file, _ in available) or len({file.project_id for file, _ in available}) > 1:
             record("Executing guarded global workflow with per-project receipts")
             return run_global_workflow(db, actor, config, active_conversation, available,
@@ -329,14 +344,14 @@ async def answer(conversation_id, payload, request, principal, db, identifier, r
         if workflow_id in {'analyze_intake', 'process_activity'}:
             return handle_message(db, actor, config, active_conversation,
                                   'Analyze' if workflow_id == 'analyze_intake' else 'Process',
-                                  payload.project_id, payload.document_ids, request_id)
+                                  payload.project_id, selected_ids, request_id)
         project_ids = {file.project_id for file, _ in available}
         project_id = payload.project_id or (next(iter(project_ids)) if len(project_ids) == 1 else None)
         if project_id is None:
             return 'Select the project in Context so I can run the stored workflow. You do not need to specify its steps.'
         run = run_workflow(db, actor, config, workflow_id=workflow_id, project_id=project_id,
                            request_key=f'chat:{identifier}:{request_id}', conversation_id=identifier,
-                           document_ids=payload.document_ids)
+                           document_ids=selected_ids)
         return render_run(run)
 
     # Conversation control/status never depends on an untrusted model answer.
@@ -408,7 +423,7 @@ async def answer(conversation_id, payload, request, principal, db, identifier, r
         # Unlike ad-hoc source previews, it is safe and must survive reload.
     else:
         reply = handle_message(db, principal, config, conversation, payload.message, payload.project_id,
-                               payload.document_ids, request_id)
+                               selected_ids, request_id)
     handled_workflow = reply is not None
     projects = None
     if handled_workflow:

@@ -370,7 +370,10 @@ def handle_message(db,principal,config,conversation,message,project_id,document_
             if project_id is not None and project_id!=state['scope']['project_id']:
                 return 'Mapping proposal is stale for this project selection. Request Process to review its files.'
             if document_ids and sorted(str(i) for i in document_ids)!=state['scope'].get('document_ids',[]):
-                return 'Mapping proposal is stale for this file selection. Request Process to review its files.'
+                # A conversation-scoped selection is the same evidence as the
+                # pending proposal whenever both resolve to the identical sources.
+                if sorted(str(i) for i in document_ids)!=sorted(state['scope'].get('source_ids',[])):
+                    return 'Mapping proposal is stale for this file selection. Request Process to review its files.'
         try:
             if state.get('pending')=='process':
                 require_scope(db,principal,conversation,state)

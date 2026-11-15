@@ -21,6 +21,8 @@ PASSWORD = "local test password"
 def client(tmp_path, monkeypatch):
     url = f"sqlite:///{tmp_path / 'test.db'}"
     monkeypatch.setenv("TIMMY_DATABASE_URL", url)
+    # Origin is part of the contract under test; a developer's .env must not change it.
+    monkeypatch.setenv("TIMMY_FRONTEND_ORIGIN", "http://localhost:5173")
     settings.cache_clear()
     try:
         config = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))

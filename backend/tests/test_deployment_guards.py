@@ -80,7 +80,7 @@ def test_observability_migration_declaration_is_exactly_pinned():
     blob = subprocess.check_output(['git', 'hash-object', migration], cwd=ROOT, text=True).strip()
     assert fields[3] == blob
     changes = subprocess.check_output(['git', 'diff', '--name-status',
-        '4f980420a64601dacd0c96144a6f8d37b2435ac8', '--', 'backend/migrations'], cwd=ROOT, text=True).strip()
+        'f203273f42b937eab8605445c89ecf759e0d6096', '--', 'backend/migrations'], cwd=ROOT, text=True).strip()
     assert changes == 'A\t' + migration
 
 
@@ -88,7 +88,7 @@ def test_active_release_serves_expanded_observability_schema(tmp_path, client):
     import io
     import tarfile
     archive = subprocess.check_output(['git', 'archive',
-        '4f980420a64601dacd0c96144a6f8d37b2435ac8', 'backend'], cwd=ROOT)
+        'f203273f42b937eab8605445c89ecf759e0d6096', 'backend'], cwd=ROOT)
     old = tmp_path / 'active-release'
     old.mkdir()
     with tarfile.open(fileobj=io.BytesIO(archive)) as source:

@@ -149,7 +149,7 @@ response should remove authentication cookies or browser-stored user documents.
 
 The candidate manifest pins only `0020_reporting_register.py`, an additive
 migration creating seven reporting/payment-evidence tables. The compatibility
-regression runs archived release `4f980420a64601dacd0c96144a6f8d37b2435ac8`
+regression runs archived release `f203273f42b937eab8605445c89ecf759e0d6096`
 against the expanded schema. CI also checks a populated upgrade and model drift.
 Use the existing blob-pinned migration gate after reviewing the candidate and
 successful CI; do not disable that gate to deploy a different migration tree.
