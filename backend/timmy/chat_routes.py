@@ -16,7 +16,6 @@ from .auth import Authenticated, Database, require_csrf
 from .chat import respond
 from .models import ChatTurn, Conversation, projects as project_table
 from .auth import current_principal
-from .payment_configuration import policy_history
 from .demo_operations import records as demo_records, summary as demo_summary
 from .repositories import visible_projects
 from .workflows import run_workflow, render_run
@@ -339,15 +338,16 @@ async def answer(conversation_id, payload, request, principal, db, identifier, r
             reply = "Select a project in Context to see its configured payment policy."
         else:
             principal.require("projects:read", payload.project_id)
-            policies = [item for item in policy_history(db, payload.project_id) if item["status"] == "active"]
-            rows = []
-            for item in policies:
-                policy = item["configuration"]
-                unit = "hour" if policy["family"] == "hours" else "approved session"
-                end = f" through {policy['end']}" if policy["end"] else ""
-                rows.append(f"- Version {item['version']}: {policy['currency']} {policy['rate']} per {unit}, effective {policy['start']}{end}.")
-            reply = ("Active policies for the selected project:\n" + "\n".join(rows) if rows
-                     else "This project has no active payment policy. An administrator can configure it in Projects → Payment policies.")
+            family = db.execute(select(project_table.c.policy_family).where(
+                project_table.c.id == payload.project_id
+            )).scalar_one_or_none()
+            if family == "session":
+                reply = "This project uses the fixed session-based policy. Project-specific rate and rule editing is disabled."
+            elif family == "hours":
+                reply = ("This project uses the fixed hours-based policy family. "
+                         "Final hourly rules are awaiting explicit approval; amounts must not be guessed.")
+            else:
+                reply = "This legacy project's payment policy type needs administrator review."
         record("Checked project payment policy configuration")
     else:
         reply = handle_message(db, principal, config, conversation, payload.message, payload.project_id,
