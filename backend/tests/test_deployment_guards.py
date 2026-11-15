@@ -3,6 +3,7 @@ from pathlib import Path
 import os
 import subprocess
 import sys
+from test_foundation import client
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -69,3 +70,42 @@ def test_server_cannot_expose_live_dotenv_to_test_runner():
     assert "env -i " in script
     assert 'cp -a "$repo/backend" "$scratch/source/backend"' in script
     assert '[[ ! -e "$scratch/source/.env" ]]' in script
+
+
+def test_observability_migration_declaration_is_exactly_pinned():
+    fields = (ROOT / 'ops/deploy/additive-migration').read_text().split()
+    assert fields[:2] == ['0018', '0019']
+    migration = 'backend/migrations/versions/0019_execution_observability.py'
+    assert fields[2] == migration and len(fields) == 4
+    blob = subprocess.check_output(['git', 'hash-object', migration], cwd=ROOT, text=True).strip()
+    assert fields[3] == blob
+    changes = subprocess.check_output(['git', 'diff', '--name-status',
+        'da97587e7f0006c6a04c79e77efbafbbfe972da3', '--', 'backend/migrations'], cwd=ROOT, text=True).strip()
+    assert changes == 'A\t' + migration
+
+
+def test_active_release_serves_expanded_observability_schema(tmp_path, client):
+    import io
+    import tarfile
+    archive = subprocess.check_output(['git', 'archive',
+        'da97587e7f0006c6a04c79e77efbafbbfe972da3', 'backend'], cwd=ROOT)
+    old = tmp_path / 'active-release'
+    old.mkdir()
+    with tarfile.open(fileobj=io.BytesIO(archive)) as source:
+        source.extractall(old, filter='data')
+    script = '''
+from fastapi.testclient import TestClient
+from timmy.main import create_app
+from timmy.config import Settings
+with TestClient(create_app(Settings(database_url=DATABASE, frontend_origin='http://localhost:5173', cookie_secure=False, weekly_enabled=False))) as client:
+    assert client.get('/api/health').status_code == 200
+    result = client.post('/api/auth/login', headers={'Origin':'http://localhost:5173'}, json={'username':'reviewer','password':'local test password'})
+    assert result.status_code == 200, result.text
+    assert len(client.get('/api/projects').json()) == 1
+'''
+    script = 'DATABASE = ' + repr(client.app.state.config.database_url) + '\n' + script
+    env = os.environ.copy()
+    env['PYTHONPATH'] = str(old / 'backend')
+    result = subprocess.run([sys.executable, '-c', script], cwd=old, env=env,
+                            capture_output=True, text=True, timeout=60)
+    assert result.returncode == 0, result.stdout + result.stderr
