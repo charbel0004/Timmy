@@ -67,6 +67,7 @@ def reference(name, target):
 projects = Table(
     "projects", metadata, identity(), Column("name", String(160), nullable=False),
     Column("project_code", String(80), unique=True, index=True),
+    Column("policy_family", String(12)),  # NULL only on legacy projects pending human selection
     Column("status", String(12), nullable=False, server_default="active"),
     Column("archived_from", String(12)),
     CheckConstraint("status IN ('draft','active','completed','archived')", name="ck_project_status"),
