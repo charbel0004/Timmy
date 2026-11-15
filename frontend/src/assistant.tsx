@@ -1,3 +1,4 @@
+import { createRequestId } from "./request-id";
 import { ExecutionTimeline } from "./observatory";
 import remarkGfm from "remark-gfm";
 import { Dictation, SpokenResponse } from "./voice";
@@ -216,10 +217,16 @@ export function Assistant({ conversation, append, canReadProjects, csrfToken, on
     event.preventDefault();
     const message = draft.trim();
     if (sending.current || !message) return;
+    let attempt: { id?: string; message: string; requestId: string };
+    try {
+      attempt = pending.current?.message === message ? pending.current : {
+        id: pending.current?.id ?? conversation?.id, message, requestId: createRequestId(),
+      };
+    } catch {
+      setError("Could not prepare this request. Reload the page or try another browser.");
+      return;
+    }
     sending.current = true;
-    const attempt = pending.current?.message === message ? pending.current : {
-      id: pending.current?.id ?? conversation?.id, message, requestId: crypto.randomUUID(),
-    };
     pending.current = attempt;
     const optimistic: ChatMessage = {
       id: attempt.requestId, role: "user", text: message, timestamp: new Date().toISOString(),
