@@ -355,7 +355,7 @@ async def answer(conversation_id, payload, request, principal, db, identifier, r
                 project_ids = [project.id for project in accessible]
                 families = dict(db.execute(select(project_table.c.id, project_table.c.policy_family).where(
                     project_table.c.id.in_(project_ids))).all())
-                reply = "Fixed payment-policy families by project (no editable monetary parameters):\\n" + "\\n".join(
+                reply = "Fixed payment-policy families by project (no editable monetary parameters):\n" + "\n".join(
                     f"- {project.name}: {families.get(project.id) or 'not assigned (legacy project)'}"
                     for project in accessible)
         else:
