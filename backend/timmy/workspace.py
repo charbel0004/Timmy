@@ -97,7 +97,6 @@ class ProjectInput(Payload):
 
 class ProjectCreate(ProjectInput):
     policy_family: Literal["session", "hours"]
-    status: Literal["draft", "active"] = "draft"
 
 
 class ProjectTransition(Payload):
@@ -329,7 +328,7 @@ def create_project(body: ProjectCreate, request: Request, principal: Authenticat
     require_csrf(request, principal)
     try:
         identifier = db.execute(insert(projects).values(
-            name=body.name, project_code=body.code, policy_family=body.policy_family, status=body.status,
+            name=body.name, project_code=body.code, policy_family=body.policy_family, status="active",
         )).inserted_primary_key[0]
     except IntegrityError:
         raise HTTPException(409, "Project code already exists") from None
