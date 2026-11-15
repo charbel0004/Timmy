@@ -78,8 +78,8 @@ def test_fixed_policy_lookup_does_not_invent_hourly_rate(client):
 def test_existing_projects_preserved_without_invented_family(client):
     headers = login_admin(client)
     # The fixture contains historical projects created before this new mandatory choice.
-    legacy = client.get("/api/payment-policies/1")
-    assert legacy.status_code == 200
-    assert legacy.json() == {
-        "family": None, "configuration_editable": False, "status": "unassigned_legacy",
-    }
+    with Session(client.app.state.engine) as db:
+        assert db.scalar(select(projects.c.policy_family).where(projects.c.id == 1)) is None
+    # Even the sole admin must not bypass the existing project-read authorization
+    # until we explicitly review the single-admin access migration.
+    assert client.get("/api/payment-policies/1").status_code == 403
