@@ -205,3 +205,25 @@ def test_rule_version_change_invalidates_payment_approval(coordinator,monkeypatc
         json={'digest':draft['digest'],'approve_exact_snapshot':True})
     assert refused.status_code==409 and 'rule version changed' in refused.text
     with Session(c.app.state.engine) as db:assert not list(db.scalars(select(WorkflowPaymentApproval)))
+
+
+def test_planning_format_proposals_use_original_project_rows_and_require_human_confirmation(coordinator):
+    from sqlalchemy import delete
+    c,h,conv=coordinator
+    with Session(c.app.state.engine) as db,db.begin():db.execute(delete(PlanningCodeContract))
+    load(coordinator,'01_Happy_Path')
+    state=c.get(f'/api/global-mappings/{conv}').json()
+    proposals=state['contract_candidates']
+    assert {p['project_code']:p['code_pattern'] for p in proposals}=={'TCD':'26-TCD-[0-9]{3}','FOS':'26-FOS-[0-9]{3}'}
+    for p in proposals:
+        assert p['evidence'] and all(e['filename']=='planning.xlsx' and e['sheet']=='Activities' and e['row']>=2 for e in p['evidence'])
+        assert p['sample_code'].startswith('26-'+p['project_code']+'-')
+    p=proposals[0]
+    body={k:p[k] for k in ('version','code_pattern','sample_code','source_ref')}
+    body.update(conversation_id=conv,source_fingerprint=state['fingerprint'],approved_source_format=False)
+    assert c.post(f'/api/global-mappings/contracts/{p["project_id"]}',headers=h,json=body).status_code==422
+    body.update(approved_source_format=True,sample_code=p['project_code'])
+    assert c.post(f'/api/global-mappings/contracts/{p["project_id"]}',headers=h,json=body).status_code==422
+    body.update(sample_code=p['sample_code'],source_fingerprint='0'*64)
+    assert c.post(f'/api/global-mappings/contracts/{p["project_id"]}',headers=h,json=body).status_code==409
+    with Session(c.app.state.engine) as db:assert not list(db.scalars(select(PlanningCodeContract)))

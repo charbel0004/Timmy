@@ -96,3 +96,12 @@ External bank settlement/reconciliation authority is unchanged. A report registe
 is not a payment-return register and cannot mark obligations settled. Those
 legacy reconciliation adapters remain explicitly gated pending an approved
 finance-return contract; they are not represented as completed by this work.
+
+Planning code-format review now starts with a deterministic proposal from confirmed
+planning columns. It displays project name/acronym, original activity codes,
+workbook/sheet/physical row and original SHA-256. The proposal infers only a bounded
+numeric suffix format when observed codes share one shape. Missing/inconsistent
+codes require correction; nothing is invented or approved from workbook labels.
+An administrator explicitly confirms the proposal; the API rechecks original bytes,
+source fingerprint, project attribution and that the format covers every observed
+planning code before resuming. Manual edits are available as an exception.
