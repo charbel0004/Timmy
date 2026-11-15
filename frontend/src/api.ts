@@ -22,13 +22,23 @@ export class ApiError extends Error {
   constructor(readonly status: number, message: string) { super(message); }
 }
 
-export const apiBase = import.meta.env.VITE_API_URL ?? "http://localhost:8000/api";
+// Structured 500 details must render as text; an object here would crash React.
+function detailMessage(detail: unknown): string {
+  if (typeof detail === "string") return detail;
+  if (detail && typeof detail === "object") {
+    const { code, action } = detail as { code?: string; action?: string };
+    return [code, action].filter(Boolean).join(" — ") || "Request failed";
+  }
+  return "Request failed";
+}
+
+export const apiBase = import.meta.env.VITE_API_URL ?? "/api";
 
 export async function rawRequest(path: string, init?: RequestInit): Promise<Response> {
   const response = await fetch(apiBase + path, { ...init, credentials: "include" });
   if (!response.ok) {
     const body = await response.json().catch(() => null);
-    throw new ApiError(response.status, body?.detail ?? "Request failed");
+    throw new ApiError(response.status, detailMessage(body?.detail));
   }
   return response;
 }

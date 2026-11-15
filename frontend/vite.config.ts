@@ -16,5 +16,10 @@ export default defineConfig({
       this.emitFile({ type: "asset", fileName: "app-version.json", source: JSON.stringify({ version: releaseId }) });
     },
   }],
-  server: { strictPort: true },
+  server: {
+    strictPort: true,
+    // Same-origin /api in dev, matching production. Keeps cookies and the
+    // API's exact-origin CSRF check working on any host, not just localhost.
+    proxy: { "/api": { target: "http://127.0.0.1:8000", changeOrigin: false } },
+  },
 });
