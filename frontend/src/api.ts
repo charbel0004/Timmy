@@ -38,7 +38,7 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return response.status === 204 ? (undefined as T) : response.json();
 }
 
-export interface DocumentRecord { id: string; project_id: number; filename: string; rows: number; status: string; sha256: string }
+export interface DocumentRecord { id: string; project_id: number | null; filename: string; rows: number; status: string; sha256: string }
 export interface ConversationWorkflow {
   stage: string;
   scope?: { project_id: number; source_ids: string[]; source_rows: number };
@@ -63,8 +63,8 @@ export const api = {
     }),
   documentMetrics: () => request<{ documents: number; source_rows: number }>("/documents/metrics"),
   documents: (conversation?: string) => request<DocumentRecord[]>(conversation ? `/documents?conversation_id=${conversation}` : "/documents"),
-  uploadDocument: (project: number, conversation: string, file: File, csrf: string) =>
-    request<DocumentRecord>(`/documents?${new URLSearchParams({ project_id: String(project), conversation_id: conversation, filename: file.name })}`, {
+  uploadDocument: (project: number | undefined, conversation: string, file: File, csrf: string) =>
+    request<DocumentRecord>(`/documents?${new URLSearchParams({ ...(project === undefined ? {} : { project_id: String(project) }), conversation_id: conversation, filename: file.name })}`, {
       method: "POST", headers: { "X-CSRF-Token": csrf, "Content-Type": file.type || "application/octet-stream" }, body: file,
     }),
   session: () => request<Session>("/auth/session"),
