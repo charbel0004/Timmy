@@ -1,13 +1,32 @@
 """Explicit adapter for the synthetic AlphaHack workbook. No live authority."""
 from collections import defaultdict
 from datetime import date, datetime, time, timedelta
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from .documents import parse
-from .payment_configuration import PolicyConfiguration, example_calculation
+
+class DemoPolicy(BaseModel):
+    """Synthetic historical workbook only; NOT an operational editable policy."""
+    model_config = ConfigDict(extra="forbid")
+
+    family: Literal["hours", "session"]
+    rate: Decimal = Field(gt=0)
+    currency: str
+    start: date
+    end: date | None
+    daily_cap: int = Field(gt=0)
+
+
+def demo_example_calculation(policy: DemoPolicy, eligible: int) -> dict:
+    divisor = 60 if policy.family == "hours" else 1
+    amount = ((Decimal(eligible) * policy.rate) / divisor).quantize(
+        Decimal("0.01"), rounding=ROUND_HALF_UP
+    )
+    return {"amount": f"{amount:.2f}"}
+
 
 HEADERS = {
     "01_Project_Policies": "ProjectID ProjectName PolicyType Rate Currency EffectiveFrom EffectiveTo DurationRounding OvernightRule DailyCap MoneyRounding PolicyEvidence",
@@ -72,11 +91,9 @@ def map_policy(row):
         raise ValueError("Unsupported daily cap unit")
     if row["PolicyEvidence"] != "DEMO - administrator confirmed":
         raise ValueError("Missing synthetic policy authority marker")
-    return PolicyConfiguration(
+    return DemoPolicy(
         family="hours" if hours else "session", rate=row["Rate"], currency=row["Currency"],
         start=row["EffectiveFrom"], end=row["EffectiveTo"], daily_cap=int(cap) * (60 if hours else 1),
-        eligibility="approved_evidence_only", precision=2, monetary_rounding="half_up",
-        duration_rounding="exact" if hours else None, overnight="continuous" if hours else None,
     )
 
 
@@ -130,7 +147,7 @@ def calculate(policies, activities, volunteers, timesheets, reports, reviews):
         else:
             accepted[person].append((activity, day, interval))
             used_daily[key] += quantity
-        amount = example_calculation(policy, quantity)["amount"]
+        amount = demo_example_calculation(policy, quantity)["amount"]
         results.append({"timesheet": ts, "project": project, "activity": activity, "volunteer": person,
                         "raw": raw, "eligible": quantity, "excluded": raw - quantity,
                         "billable_quantity": str(Decimal(quantity) / (60 if policy.family == "hours" else 1)),
