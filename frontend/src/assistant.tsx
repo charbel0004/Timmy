@@ -163,6 +163,7 @@ export function Assistant({ conversation, append, canReadProjects, csrfToken, on
   const sending = useRef(false);
   const [error, setError] = useState("");
   const [projects, setProjects] = useState<Project[]>();
+  const [projectScope, setProjectScope] = useState<number>();
   const [projectError, setProjectError] = useState(false);
   const [model, setModel] = useState("Checking Ollama…");
   const messages = conversation?.messages ?? [];
@@ -176,10 +177,16 @@ export function Assistant({ conversation, append, canReadProjects, csrfToken, on
   }, [draft]);
 
   useEffect(() => {
-    if (!canReadProjects || !open) return;
+    if (!canReadProjects) return;
     let active = true;
     api.projects().then(
-      (data) => { if (active) { setProjects(data); setProjectError(false); } },
+      (data) => {
+        if (!active) return;
+        setProjects(data);
+        setProjectError(false);
+        // Preselect the only project so attachments are attributed on upload.
+        setProjectScope((current) => current ?? (data.length === 1 ? data[0].id : undefined));
+      },
       () => { if (active) setProjectError(true); },
     );
     api.aiStatus().then(
@@ -190,7 +197,7 @@ export function Assistant({ conversation, append, canReadProjects, csrfToken, on
       () => { if (active) setModel("Ollama status unavailable"); },
     );
     return () => { active = false; };
-  }, [canReadProjects, open]);
+  }, [canReadProjects]);
 
   useEffect(() => {
     if (!conversation?.id) return;
@@ -257,7 +264,7 @@ export function Assistant({ conversation, append, canReadProjects, csrfToken, on
       attempt.id = id;
       if (files.length) setSteps(["Uploading attachments for project mapping"]);
       for (const file of files) {
-        const record = await api.uploadDocument(undefined, id, file, csrfToken);
+        const record = await api.uploadDocument(projectScope, id, file, csrfToken);
         setDocuments((current) => [...current, record]);
         setFiles((current) => current.filter((item) => item !== file));
         append(id);
@@ -267,7 +274,7 @@ export function Assistant({ conversation, append, canReadProjects, csrfToken, on
       sent = true;
       polling = true;
       timer = setInterval(() => void refreshSteps(), 2000);
-      const reply = await api.sendMessage(id, message, csrfToken, attempt.requestId);
+      const reply = await api.sendMessage(id, message, csrfToken, attempt.requestId, projectScope);
       try {
         reply.message.activity = (await api.assistantActivity(id, attempt.requestId)).steps;
       } catch { /* The reply remains usable if the activity request fails. */ }
@@ -322,7 +329,7 @@ export function Assistant({ conversation, append, canReadProjects, csrfToken, on
           append(conversation.id, ...persistedMessages.filter((message) => !knownIds.has(message.id)));
         }} />}
       <form className="chat-composer" onSubmit={submit}>
-        <p className="muted"><Badge tone="cyan">Local Ollama</Badge> Files are available across your authorized projects. Timmy matches source rows by approved project and activity codes.</p>
+        <p className="muted"><Badge tone="cyan">Local Ollama</Badge> Attachments are processed for the project selected in Context; its files determine mapping, never another project's.</p>
         <label htmlFor="chat-input" className="sr-only">Message Agent Timmy</label>
         <textarea ref={textarea} id="chat-input" dir="auto" rows={2} placeholder="Message Agent Timmy…" maxLength={1500} value={draft}
           readOnly={busy} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => {
@@ -377,12 +384,15 @@ export function Assistant({ conversation, append, canReadProjects, csrfToken, on
     {open && <aside id="assistant-context" className="assistant-context glass-panel" aria-label="Conversation context">
       <h2>Conversation context</h2>
       {canReadProjects && <>
-        <h3>Available projects</h3>
-        <p className="muted">Chat is global; the source files determine project matches, not a project selector.</p>
-        {projects?.length ? <ul className="project-list">{projects.map((project) =>
-          <li key={project.id}>{project.name}</li>)}</ul> :
+        <h3><label htmlFor="chat-project">Project scope</label></h3>
+        {projects?.length ? <select id="chat-project" value={projectScope ?? ""} disabled={busy}
+          onChange={(event) => setProjectScope(event.target.value ? Number(event.target.value) : undefined)}>
+          <option value="">All authorized projects</option>
+          {projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
+        </select> :
           <p role="status" className="muted">{projectError ? "Projects unavailable" :
           projects ? "No assigned projects" : "Loading projects…"}</p>}
+        <p className="muted">Process and Analyze use this conversation's files for the selected project.</p>
         <p role="status" className="muted">{model}</p>
       </>}
       <dl className="status-list">

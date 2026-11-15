@@ -57,6 +57,20 @@ def conversation(client, tmp_path, monkeypatch):
     return client,headers,identifier,send,state,upload,files,ids
 
 
+def test_selected_project_scopes_process_to_this_conversation(conversation):
+    client, headers, identifier, send, state, upload, files, ids = conversation
+    other = client.post('/api/chat/conversations', headers=headers).json()['id']
+    unrelated = client.post('/api/documents',
+                            params={'filename': 'unrelated.csv', 'project_id': 1, 'conversation_id': other},
+                            content=b'project_code,activity_code\nQ,TEST-Z-999\n',
+                            headers=headers | {'Content-Type': 'text/csv'})
+    assert unrelated.status_code == 201, unrelated.text
+    send('Process', project_id=1)
+    scope = state()['scope']
+    assert set(scope['source_ids']) == set(ids)
+    assert unrelated.json()['id'] not in scope['source_ids']
+
+
 def test_original_confirmation_sequence_advances_and_status_is_real(conversation):
     c,h,conv,send,state,*_=conversation
     answer=send('Analyze these files.')
@@ -126,14 +140,15 @@ def test_project_scope_remains_stable_and_repeated_analysis_reuses_run(conversat
     older=c.post('/api/chat/conversations',headers=h).json()['id']
     for _ in range(4):upload(files,older)
     answer=send('Analyze these files.',project_id=1)
-    assert '20 files' in answer and '300 source rows' in answer
+    # A selected project scopes the workflow to this conversation's attachments,
+    # so files uploaded in another conversation cannot widen or block it.
+    assert '4 files' in answer and '60 source rows' in answer
     run=state()['intake_run_id']
     send('Analyze these files.')
     assert state()['intake_run_id']==run
     send('Yes')
-    assert len(state()['scope']['source_ids'])==20
-    assert state()['scope']['source_rows']==300
-    # Existing list stays conversation-local (4), while workflow explicitly records project scope (20).
+    assert len(state()['scope']['source_ids'])==4
+    assert state()['scope']['source_rows']==60
     assert len(c.get('/api/documents',params={'conversation_id':conv}).json())==4
 
 
