@@ -168,3 +168,13 @@ Rollback switches application code and keeps schema 0020 and its evidence.
 Never restore an old backup over live writes or downgrade evidence tables after
 recording approvals without an operator retention/reconciliation plan. This
 change has no external payment-delivery or bank-settlement adapter.
+
+
+### CI frequency
+
+The backend tests/database checks and frontend tests/build run once on pushes to
+`main`, including merged pull requests. Feature-branch pushes and pull requests
+do not trigger this suite. A failure is therefore discovered after merge and
+holds deployment. The existing workflow-run gate deploys only a successful
+main push from this repository, bound to the exact verified SHA. This reduces
+duplicate CI runs; it does not remove the checks before production deployment.
