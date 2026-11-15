@@ -46,7 +46,7 @@ def test_project_requires_one_fixed_family_and_rejects_configurable_values(clien
         assert value["family"] == family
         assert value["configuration_editable"] is False
         assert value["status"] == ("fixed_session_contract" if family == "session"
-                                   else "pending_hourly_contract")
+                                   else "fixed_hours_contract")
         assert client.post(f"/api/payment-policies/{identifier}", headers=headers,
                            json={"rate": "100"}).status_code == 405
         assert client.post(f"/api/payment-policies/{identifier}/example", headers=headers,
@@ -58,7 +58,7 @@ def test_project_requires_one_fixed_family_and_rejects_configurable_values(clien
             )) is None
 
 
-def test_fixed_policy_lookup_does_not_invent_hourly_rate(client):
+def test_fixed_policy_lookup_uses_approved_hourly_contract(client):
     headers = login_admin(client)
     created = client.post("/api/workspace/projects", headers=headers, json={
         "name": "Hours", "code": "HRS", "policy_family": "hours",
@@ -72,7 +72,11 @@ def test_fixed_policy_lookup_does_not_invent_hourly_rate(client):
         "project_id": project_id,
     })
     assert result.status_code == 200, result.text
-    assert "awaiting explicit approval" in result.json()["message"]["text"]
+    text = result.json()["message"]["text"]
+    assert "USD 5 per hour" in text
+    assert "USD 600" in text
+    assert "16 actual nonoverlapping" in text
+    assert "Financial eligibility" in text
 
 
 def test_existing_projects_preserved_without_invented_family(client):
