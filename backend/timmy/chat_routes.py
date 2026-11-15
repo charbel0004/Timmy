@@ -207,8 +207,16 @@ async def answer(conversation_id, payload, request, principal, db, identifier, r
     request_context = payload.model_dump(mode='json', exclude={'request_id'})
     saved_scope = (conversation.workflow_state or {}).get('scope', {})
     inherited_scope = payload.project_id is None and not payload.document_ids
-    effective_project = saved_scope.get('project_id') if inherited_scope else payload.project_id
-    effective_ids = saved_scope.get('source_ids', []) if inherited_scope else payload.document_ids
+    # An existing single-project workflow must not shadow newly attached global
+    # documents or make a chat permanently tied to an older selected project.
+    current_documents = resolve_documents(db, principal, identifier, None, []) if inherited_scope else []
+    global_sources = any(f.project_id is None for f, _ in current_documents) or (
+        len({f.project_id for f, _ in current_documents}) > 1
+    )
+    effective_project = (saved_scope.get('project_id') if inherited_scope and not global_sources
+                         else payload.project_id)
+    effective_ids = (saved_scope.get('source_ids', []) if inherited_scope and not global_sources
+                     else payload.document_ids)
     documents = [] if policy_lookup else resolve_documents(db, principal, identifier, effective_project, effective_ids)
     source_ids = [file.id for file, _ in documents]
     multi_project_documents = bool(documents) and (
@@ -378,7 +386,8 @@ async def answer(conversation_id, payload, request, principal, db, identifier, r
         reply = run_global_workflow(db, principal, config, conversation, documents,
                                     workflow_id=selection, request_id=request_id)
         record("Recorded guarded per-project workflow steps for global conversation")
-        document_used = True
+        # Persist the actual bounded workflow receipt summary in chat history.
+        # Unlike ad-hoc source previews, it is safe and must survive reload.
     else:
         reply = handle_message(db, principal, config, conversation, payload.message, payload.project_id,
                                payload.document_ids, request_id)
