@@ -30,6 +30,24 @@ from .failure_diagnostics import classify
 
 router = APIRouter(prefix="/api/chat/conversations")
 
+# A request to APPLY policies is not a question asking about their rates.
+_POLICY_TERMS = re.compile(r"\b(?:hourly|session|payment) rate\b|\bpayment polic(?:y|ies)\b", re.I)
+_OPERATION_VERBS = re.compile(
+    r"\b(?:process|apply|calculate|prepare|generate|export|create|draft|run|validate|match|"
+    r"register|reconcile|execute)\b", re.I
+)
+_MAPPING_HELP = re.compile(r"\bmappings?\b|\bcolumn(?:s)?(?:\s+mappings?)?\b", re.I)
+_REVIEW_VERBS = re.compile(r"\b(?:show|display|review|approve|confirm|see|inspect)\b", re.I)
+_NEXT_STEPS = re.compile(
+    r"\bwhat\b.{0,100}\b(?:need|require)\b.{0,100}\b(?:continue|proceed|workflow)\b"
+    r"|\b(?:what(?:'s| is)\s+next|how\s+(?:do|can)\s+I\s+continue)\b", re.I
+)
+
+
+def is_policy_lookup(message: str, document_ids=()) -> bool:
+    return not document_ids and bool(_POLICY_TERMS.search(message)) and not _OPERATION_VERBS.search(message)
+
+
 
 class SendMessage(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
@@ -193,7 +211,16 @@ async def send(conversation_id: UUID, payload: SendMessage, request: Request, pr
     try:
         result = await answer(conversation_id, payload, request, principal, db, identifier, record)
     except HTTPException as error:
-        record("Request stopped", status=error.status_code)
+        # Keep private resource details out of telemetry. These are constant,
+        # documented error classes, not user-controlled exception text.
+        safe_codes = {
+            "Conversation unavailable": "CHAT_CONVERSATION_UNAVAILABLE",
+            "A selected document is unavailable in this scope": "CHAT_DOCUMENT_SCOPE_UNAVAILABLE",
+            "No active mapping proposal is available in this conversation": "CHAT_MAPPING_PROPOSAL_UNAVAILABLE",
+        }
+        code = safe_codes.get(error.detail) if isinstance(error.detail, str) else None
+        record("Request stopped", status=error.status_code,
+               code=code or "CHAT_HTTP_REJECTED")
         raise
     except Exception as error:
         failure = classify(error, step="CHAT_REQUEST")
@@ -219,9 +246,7 @@ async def answer(conversation_id, payload, request, principal, db, identifier, r
     request_id = str(payload.request_id)
     query = select(ChatTurn).where(ChatTurn.conversation_id == identifier, ChatTurn.request_id == request_id)
 
-    policy_lookup = not payload.document_ids and bool(re.search(
-        r"\b(?:hourly|session|payment) rate\b|\bpayment polic(?:y|ies)\b", payload.message, re.I
-    ))
+    policy_lookup = is_policy_lookup(payload.message, payload.document_ids)
     request_context = payload.model_dump(mode='json', exclude={'request_id'})
     # The AI Workspace defaults to every active project the actor can access.
     # Past single-project workflow state must never narrow a new global request.
@@ -403,6 +428,47 @@ async def answer(conversation_id, payload, request, principal, db, identifier, r
             else:
                 reply = "This legacy project's payment policy type needs administrator review."
         record("Checked project payment policy configuration")
+    elif multi_project_documents and _MAPPING_HELP.search(payload.message) and _REVIEW_VERBS.search(payload.message):
+        # Present a versioned mapping proposal without interpreting this as
+        # planning, reporting, staff or financial approval.
+        from .global_mappings import proposals, view as mapping_view
+        check_integrity(config, documents)
+        discovery = discover_projects(db, principal, documents)
+        matched_projects = [item['project_id'] for item in discovery['projects'] if item['matched_rows']]
+        if matched_projects:
+            proposals(db, principal, conversation, documents, matched_projects, create=True)
+            mapping = mapping_view(db, principal, conversation, documents)
+            if mapping and mapping['confirmed']:
+                reply = ("Column mappings are already confirmed for the recognized project rows. "
+                         "Review planning code formats below if shown; mapping does not approve "
+                         "planning, staff, reports or payment requests.")
+            else:
+                reply = ("Review source mappings for all matched projects in the panel below, "
+                         "then use 'Confirm column mappings and continue' when the columns are correct. "
+                         "Uncertain columns require an authorized reviewer.")
+            record("Presented persisted global source mapping review")
+        else:
+            reply = ("No source rows can be reliably attributed to an active authorized project. "
+                     "Review original project-code values; Timmy will not invent identities.")
+            record("Global mapping requires project identity review")
+    elif multi_project_documents and _NEXT_STEPS.search(payload.message):
+        check_integrity(config, documents)
+        reply = global_workflow_status(db, principal, conversation, documents)
+        from .global_mappings import view as mapping_view
+        mapping = mapping_view(db, principal, conversation, documents)
+        if not mapping:
+            reply += ("\nNext step: request Process to initialize the source-column mapping "
+                      "for these files; no mapping approval has been recorded.")
+        elif not mapping['confirmed']:
+            reply += ("\nNext step: review the source mappings shown below and confirm "
+                      "the exact column assignments.")
+        elif mapping['missing_contracts']:
+            reply += ("\nNext step: review planning code formats below; this does not "
+                      "confer planning or financial authority.")
+        else:
+            reply += ("\nNext step: complete any planning and staff reviews in Evidence Review, "
+                      "and check the reporting-register validation. CSV export remains guarded.")
+        record("Read recorded global workflow prerequisites")
     elif multi_project_documents and STATUS.search(payload.message):
         check_integrity(config, documents)
         reply = global_workflow_status(db, principal, conversation, documents)

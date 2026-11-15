@@ -61,15 +61,22 @@ def knowledge():
 
 def choose_workflow(message):
     """Conservative shortcuts; uncertain language is clarified or model-proposed."""
-    # Never infer a write from quoted material, negation or a hypothetical.
-    if re.search(r"\b(don't|do not|never|not yet|if|suppose)\b|[\"`]|لا تعالج|لا ترسل", message, re.I):
+    # A prohibition on *transferring* money does not negate an explicit request
+    # to prepare the human-controlled payment-request CSV.
+    intent = re.sub(
+        r"\b(?:do not|don't|never)\s+(?:execute|initiate|make|transfer|send)\s+"
+        r"(?:(?:any|actual)\s+)?(?:payments?|transfers?|money)\b",
+        "", message, flags=re.I,
+    )
+    # Other negation, quotation or hypothetical wording must still fail closed.
+    if re.search(r"\b(don't|do not|never|not yet|if|suppose)\b|[\"\x60]|لا تعالج|لا ترسل", intent, re.I):
         read = next(w for w in knowledge().workflows if w.id == 'show_issues')
-        return 'show_issues' if re.search(read.trigger_pattern, message, re.I) else 'clarify'
-    if re.search(r'\bprocess payments?\b', message, re.I):
+        return 'show_issues' if re.search(read.trigger_pattern, intent, re.I) else 'clarify'
+    if re.search(r'\bprocess payments?\b', intent, re.I):
         return 'clarify'
-    if (re.search(r'\bprocess\b', message, re.I) and re.search(r'\bpayment request\b', message, re.I)):
+    if (re.search(r'\bprocess\b', intent, re.I) and re.search(r'\bpayment requests?\b', intent, re.I)):
         return 'weekly_cycle'
-    matches = [w.id for w in knowledge().workflows if re.search(w.trigger_pattern, message, re.I)]
+    matches = [w.id for w in knowledge().workflows if re.search(w.trigger_pattern, intent, re.I)]
     if len(matches) > 1:
         return 'clarify'
     return matches[0] if matches else None
