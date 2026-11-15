@@ -367,9 +367,13 @@ async def answer(conversation_id, payload, request, principal, db, identifier, r
                 project_ids = [project.id for project in accessible]
                 families = dict(db.execute(select(project_table.c.id, project_table.c.policy_family).where(
                     project_table.c.id.in_(project_ids))).all())
-                reply = "Fixed payment-policy families by project (no editable monetary parameters):\n" + "\n".join(
-                    f"- {project.name}: {families.get(project.id) or 'not assigned (legacy project)'}"
-                    for project in accessible)
+                summaries = {
+                    "session": "SESSION — USD 25 per complete 3 validated credits; full six-session Trainer/Logistic activity and independent report/approval gates apply",
+                    "hours": "HOURS — USD 5/hour; per-shift nearest 30m, monthly whole-hour floor, USD 600/month per verified staff/project, 16 actual hours in any rolling 24h; no overtime or overnight premium",
+                }
+                reply = "Built-in payment policies for available projects (not editable):\n" + "\n".join(
+                    f"- {project.name}: {summaries.get(families.get(project.id), 'unassigned (legacy project)')}"
+                    for project in accessible) + "\nCalculation rules do not confer payment eligibility or export approval."
         else:
             principal.require("projects:read", payload.project_id)
             family = db.execute(select(project_table.c.policy_family).where(
@@ -378,8 +382,11 @@ async def answer(conversation_id, payload, request, principal, db, identifier, r
             if family == "session":
                 reply = "This project uses the fixed session-based policy. Project-specific rate and rule editing is disabled."
             elif family == "hours":
-                reply = ("This project uses the fixed hours-based policy family. "
-                         "Final hourly rules are awaiting explicit approval; amounts must not be guessed.")
+                reply = ("This project uses fixed HOURS rules: USD 5 per hour; nearest 30-minute "
+                         "shift rounding, monthly whole-hour flooring, USD 600 per verified staff "
+                         "per hours-based project per calendar month; max 16 actual nonoverlapping "
+                         "hours in any rolling 24h; no overtime or overnight premium. "
+                         "Financial eligibility, source authority and export remain separately gated.")
             else:
                 reply = "This legacy project's payment policy type needs administrator review."
         record("Checked project payment policy configuration")
