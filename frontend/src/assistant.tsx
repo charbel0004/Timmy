@@ -346,7 +346,22 @@ export function Assistant({ conversation, append, canReadProjects, csrfToken, on
           const knownIds = new Set(messages.map((message) => message.id));
           append(conversation.id, ...persistedMessages.filter((message) => !knownIds.has(message.id)));
         }} />}
-      {!!workflow?.project_runs?.some(run=>run.validation_id) && <section className="report-register-panel"><h2>Planning and staff evidence reviews</h2><p>Open each saved project review, inspect the evidence, and record an authorized decision. Source mapping and report provenance do not replace these decisions.</p>{workflow.project_runs.filter(run=>run.validation_id).map(run=><p key={run.project_id}><a href={`#imports/validation/${run.validation_id}`}>Review project {run.project_id} planning and staff evidence →</a></p>)}</section>}
+      {!!workflow?.project_runs?.some(run=>run.validation_id && run.steps.some(step=>
+        step.issue_codes.includes("STAFF_VERIFICATION_REQUIRED") ||
+        step.issue_codes.includes("PLANNING_APPROVAL_EVIDENCE_REQUIRED"))) &&
+        <section className="report-register-panel"><h2>Decisions needed to continue</h2>
+          <p>Mapping and reporting files are separate from identity and planning approval.
+            Verify the outstanding category for each activity; then Timmy resumes the saved workflow.</p>
+          {workflow.project_runs.filter(run=>run.validation_id).map(run=>{
+            const needsStaff=run.steps.some(step=>step.issue_codes.includes("STAFF_VERIFICATION_REQUIRED"));
+            const needsPlanning=run.steps.some(step=>step.issue_codes.includes("PLANNING_APPROVAL_EVIDENCE_REQUIRED"));
+            return (needsStaff||needsPlanning) && <p key={run.project_id}>
+              <a href={`#imports/validation/${run.validation_id}`}>
+                Project {run.project_id}: verify {needsPlanning ? "planning" : ""}
+                {needsPlanning&&needsStaff ? " and " : ""}{needsStaff ? "staff identities" : ""} →
+              </a></p>;
+          })}
+        </section>}
       <GlobalMappings conversation={conversation?.id} csrf={csrfToken} canConfirm={canConfirmReports} revision={messages.length+documents.length} onResumed={refreshAfterEvidence} />
       <ReportingRegisterPanel onResumed={refreshAfterEvidence} conversation={conversation?.id} csrf={csrfToken} canDesignate={canDesignateReports} canConfirm={canConfirmReports} revision={messages.length+documents.length} />
       <WorkflowFindings conversation={conversation?.id} csrf={csrfToken} permissions={projectPermissions} revision={messages.length+documents.length} onResumed={refreshAfterEvidence} />
@@ -365,13 +380,13 @@ export function Assistant({ conversation, append, canReadProjects, csrfToken, on
           <p>Workflow: {workflow.stage} · {workflow.scope.source_ids.length} files · {workflow.scope.source_rows} source rows in scope.</p>
           {workflow.mapping?.confirmation_method === "verified_format_reuse" && <p>Using your previously confirmed column format; routine checks continued automatically.</p>}
           {!!workflow.project_runs?.length && <div role="region" aria-label="Recorded project workflow steps">
-            {workflow.project_runs.map((run) => <details key={run.project_id} open>
+            {workflow.project_runs.map((run) => <details key={run.project_id}>
               <summary>Project {run.project_id} · {run.workflow_id} · Run #{run.run_id} · {run.status}</summary>
               <ol>{run.steps.map((step, index) => <li key={index}>{step.step}: {step.status}
                 {step.issue_codes.length > 0 ? ` · ${step.issue_codes.join(", ")}` : ""}</li>)}</ol>
             </details>)}
           </div>}
-          {workflow.validation && <p>{workflow.project_runs?.length ? "Global routing" : "Structural validation"}: {workflow.validation.status}
+          {workflow.validation && <p>{workflow.project_runs?.length ? "Overall workflow" : "Structural validation"}: {workflow.validation.status}
             {workflow.validation.run_id && ` · Run #${workflow.validation.run_id}`}
             {workflow.validation.error_code && ` · ${workflow.validation.error_code}`}</p>}
           {workflow.scope_fresh === false && <p>The source scope changed. Request Process to review a fresh mapping proposal.</p>}
