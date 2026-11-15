@@ -16,6 +16,10 @@ from sqlalchemy import select
 from .audit import audit
 from .models import WorkflowRun, WorkflowStepReceipt, projects
 from .project_discovery import discover_projects, render_project_discovery
+from .global_source_views import preview_documents_for_project
+from .session_preview import preview
+from .planning_activities import registry
+from .documents import project_report_cutoffs
 from .workflow_graph import execute_graph
 from .workflows import knowledge, step_result
 
@@ -50,6 +54,19 @@ def run_global_workflow(db, principal, config, conversation, documents, *, workf
         principal.require("timesheets.view", project_id)
         if db.scalar(select(projects.c.status).where(projects.c.id == project_id)) != "active":
             raise HTTPException(409, "Project became inactive; request a new scope")
+        project = next(p for p in overview["projects"] if p["project_id"] == project_id)
+        provisional = None
+        if workflow_id in {"process_activity", "show_issues"} and project["policy_family"] == "session":
+            scoped_views = preview_documents_for_project(documents, project_id, project["project_code"])
+            if scoped_views:
+                try:
+                    provisional = preview(
+                        scoped_views, activity_registry=registry(db, [project_id]),
+                        report_cutoffs=project_report_cutoffs(db, project_id),
+                        project_codes={project_id: project["project_code"]},
+                    )
+                except (ValueError, TypeError, KeyError):
+                    provisional = "PROVISIONAL_SESSION_PREVIEW_UNAVAILABLE: source review required."
         original = sorted((f.id, f.sha256, r.row_count) for f, r in documents)
         fingerprint = sha256(json.dumps({
             "workflow_id": workflow_id, "knowledge": knowledge().version,
@@ -111,6 +128,7 @@ def run_global_workflow(db, principal, config, conversation, documents, *, workf
                 "project_routing_refs": overview["issue_references"],
                 "mapping_authority": "unconfirmed",
                 "payment_authority": "none",
+                "provisional_structural_preview": provisional,
                 "execution": {"mode": "synchronous",
                               "completed_at": datetime.now(timezone.utc).isoformat()},
             })
@@ -129,6 +147,9 @@ def run_global_workflow(db, principal, config, conversation, documents, *, workf
               resource_type="workflow_run", resource_id=str(run.id),
               outcome=status, trigger=workflow_id)
         report.append(f"- Project {project_id}: {workflow_id} run #{run.id} — {status}.")
+        if provisional:
+            report.append("  Provisional source-based session checks (NOT authoritative validation):")
+            report.append(provisional)
         for result in results:
             report.append(f"  - {result['step']}: {result['status']}"
                           + (f" ({', '.join(result['issue_codes'])})"
