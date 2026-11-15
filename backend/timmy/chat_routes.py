@@ -22,6 +22,7 @@ from .workflows import run_workflow, render_run
 from .documents import project_report_cutoffs
 from .conversation_workflow import handle_message, public_state, confirm_mapping
 from .project_discovery import discover_projects, render_project_discovery
+from .global_workflow import run_global_workflow
 from .workflows import choose_workflow
 from .failure_diagnostics import classify
 
@@ -305,14 +306,15 @@ async def answer(conversation_id, payload, request, principal, db, identifier, r
         db.execute(text('BEGIN IMMEDIATE'))
         actor = current_principal(request, db)
         active_conversation = owned(db, actor, conversation_id)
+        available = resolve_documents(db, actor, identifier, payload.project_id, payload.document_ids)
+        if any(file.project_id is None for file, _ in available) or len({file.project_id for file, _ in available}) > 1:
+            record("Executing guarded global workflow with per-project receipts")
+            return run_global_workflow(db, actor, config, active_conversation, available,
+                                       workflow_id=workflow_id, request_id=request_id)
         if workflow_id in {'analyze_intake', 'process_activity'}:
             return handle_message(db, actor, config, active_conversation,
                                   'Analyze' if workflow_id == 'analyze_intake' else 'Process',
                                   payload.project_id, payload.document_ids, request_id)
-        available = resolve_documents(db, actor, identifier, payload.project_id, payload.document_ids)
-        if any(file.project_id is None for file, _ in available) or len({file.project_id for file, _ in available}) > 1:
-            record("Blocked multi-project workflow until guarded project-specific execution is implemented")
-            return render_project_discovery(discover_projects(db, actor, available), processing_requested=True)
         project_ids = {file.project_id for file, _ in available}
         project_id = payload.project_id or (next(iter(project_ids)) if len(project_ids) == 1 else None)
         if project_id is None:
@@ -371,11 +373,11 @@ async def answer(conversation_id, payload, request, principal, db, identifier, r
             else:
                 reply = "This legacy project's payment policy type needs administrator review."
         record("Checked project payment policy configuration")
-    elif multi_project_documents and choose_workflow(payload.message) in {'analyze_intake', 'process_activity'}:
-        requested = choose_workflow(payload.message) == 'process_activity'
-        reply = render_project_discovery(discover_projects(db, principal, documents), processing_requested=requested)
-        record("Matched global multi-project documents and verified row-level project references")
-        # Only source inspection; never run the legacy single-project state machine.
+    elif multi_project_documents and choose_workflow(payload.message) in {'analyze_intake', 'process_activity', 'show_issues'}:
+        selection = choose_workflow(payload.message)
+        reply = run_global_workflow(db, principal, config, conversation, documents,
+                                    workflow_id=selection, request_id=request_id)
+        record("Recorded guarded per-project workflow steps for global conversation")
         document_used = True
     else:
         reply = handle_message(db, principal, config, conversation, payload.message, payload.project_id,
