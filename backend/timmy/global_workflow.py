@@ -48,7 +48,7 @@ def run_global_workflow(db, principal, config, conversation, documents, *, workf
             "\nPROJECT_ROUTING_REVIEW_REQUIRED: No unambiguously matched project rows."
         )
 
-    note = render_project_discovery(overview, processing_requested=False)
+    note = render_project_discovery(overview, workflow_receipts=True)
     report = [note, "\n### Actual project-specific workflow receipts"]
     for project_id in sorted(project_ids):
         principal.require("timesheets.view", project_id)
