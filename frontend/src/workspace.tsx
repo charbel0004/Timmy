@@ -1,11 +1,11 @@
-import { PolicyFields, ProjectPaymentPolicies, readPolicy } from "./payment-policy";
+import { ProjectPaymentPolicies } from "./payment-policy";
 import { Dialog } from "./iam-users";
 import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
 import { errorMessage, request } from "./api";
 import type { Session } from "./api";
 
-interface Project { id: number; name: string; project_code: string | null; status: string }
+interface Project { id: number; name: string; project_code: string | null; policy_family: "session" | "hours" | null; status: string }
 interface Activity { id: number; name: string; project: string; activity_code: string | null; code_authority: string; planned_start: string | null; planned_end: string | null }
 function mutate<T>(path: string, method: string, csrf?: string, body?: object) {
   return request<T>(`/workspace${path}`, {
@@ -67,7 +67,6 @@ export function Administration({ page, session }: {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(true);
   const [creating, setCreating] = useState(false);
-  const [configurePayment, setConfigurePayment] = useState(false);
   const [notice, setNotice] = useState("");
   const [revision, setRevision] = useState(0);
   const canManage = session.permissions.includes("projects:manage");
@@ -112,13 +111,17 @@ export function Administration({ page, session }: {
       {creating && <Dialog title="New project" close={() => { if (!busy) setCreating(false); }}>
         <form className="admin-form" onSubmit={(event) => submit(event, (fields) =>
           void save("/projects", "POST", { name: fields.get("name"), code: fields.get("code"), status: fields.get("status"),
-            payment_policy: configurePayment ? readPolicy(fields) : null }))}>
+            policy_family: fields.get("policy_family") }))}>
           <div className="iam-fields"><label>Project name<input name="name" required maxLength={160} /></label>
             <label>Project code<input name="code" required maxLength={80} /></label></div>
           <label>Initial status<select name="status"><option value="active">Active</option><option value="draft">Draft</option></select></label>
           <p className="muted">Active projects appear in workspace selection. Drafts stay here until activated.</p>
-          <label><input type="checkbox" checked={configurePayment} onChange={(event) => setConfigurePayment(event.target.checked)} /> Configure a draft payment policy</label>
-          {configurePayment && <PolicyFields />}
+          <label>Payment policy<select name="policy_family" required defaultValue="">
+            <option value="" disabled>Select policy type</option>
+            <option value="session">Session-based</option>
+            <option value="hours">Hours-based</option>
+          </select></label>
+          <p className="muted">Policy rules are fixed in the application. No project-specific rate or rule editing.</p>
           {error && <p role="alert">{error}</p>}
           <footer className="iam-footer"><button type="button" className="secondary" disabled={busy} onClick={() => setCreating(false)}>Cancel</button>
             <button disabled={busy}>{busy ? "Creating…" : "Create project"}</button></footer>
@@ -126,7 +129,7 @@ export function Administration({ page, session }: {
       </Dialog>}
       {!busy && !error && !projects.length && <p>No projects available.</p>}
       {projects.map((project) => <article key={project.id} className="glass-panel admin-form">
-        <h2 dir="auto">{project.name}</h2><p>{project.project_code ?? "Code unassigned"} · {project.status}</p>
+        <h2 dir="auto">{project.name}</h2><p>{project.project_code ?? "Code unassigned"} · {project.status} · {project.policy_family === "session" ? "Session-based" : project.policy_family === "hours" ? "Hours-based (policy pending approval)" : "Legacy project: policy type unassigned"}</p>
         {canManage && project.status !== "archived" && <details><summary>Edit project</summary>
           <form className="admin-grid" onSubmit={(event) => submit(event, (f) =>
             void save(`/projects/${project.id}`, "PATCH", { name: f.get("name"), code: f.get("code") }))}>
