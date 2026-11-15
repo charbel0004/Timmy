@@ -79,6 +79,11 @@ def proposal_view(proposal):
 
 
 def public_state(db,principal,conversation):
+    if not (conversation.workflow_state or {}).get('scope'):
+        from .global_workflow import global_conversation_state
+        recorded = global_conversation_state(db, principal, conversation)
+        if recorded is not None:
+            return recorded
     state=copy.deepcopy(conversation.workflow_state or {'stage':'FILES_RECEIVED','validation':None})
     if state.get('scope'):
         # Recheck access to every stored source even if the original selector changed.

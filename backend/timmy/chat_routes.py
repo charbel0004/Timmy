@@ -21,6 +21,10 @@ from .repositories import visible_projects
 from .workflows import run_workflow, render_run
 from .documents import project_report_cutoffs
 from .conversation_workflow import handle_message, public_state, confirm_mapping
+from .project_discovery import discover_projects, render_project_discovery
+from .global_workflow import run_global_workflow, global_workflow_status
+from .conversation_workflow import STATUS, check_integrity
+from .workflows import choose_workflow
 from .failure_diagnostics import classify
 
 router = APIRouter(prefix="/api/chat/conversations")
@@ -204,10 +208,22 @@ async def answer(conversation_id, payload, request, principal, db, identifier, r
     request_context = payload.model_dump(mode='json', exclude={'request_id'})
     saved_scope = (conversation.workflow_state or {}).get('scope', {})
     inherited_scope = payload.project_id is None and not payload.document_ids
-    effective_project = saved_scope.get('project_id') if inherited_scope else payload.project_id
-    effective_ids = saved_scope.get('source_ids', []) if inherited_scope else payload.document_ids
+    # An existing single-project workflow must not shadow newly attached global
+    # documents or make a chat permanently tied to an older selected project.
+    current_documents = resolve_documents(db, principal, identifier, None, []) if inherited_scope else []
+    global_sources = any(f.project_id is None for f, _ in current_documents) or (
+        len({f.project_id for f, _ in current_documents}) > 1
+    )
+    effective_project = (saved_scope.get('project_id') if inherited_scope and not global_sources
+                         else payload.project_id)
+    effective_ids = (saved_scope.get('source_ids', []) if inherited_scope and not global_sources
+                     else payload.document_ids)
     documents = [] if policy_lookup else resolve_documents(db, principal, identifier, effective_project, effective_ids)
     source_ids = [file.id for file, _ in documents]
+    multi_project_documents = bool(documents) and (
+        any(file.project_id is None for file, _ in documents)
+        or len({file.project_id for file, _ in documents}) > 1
+    )
 
     def replay(turn: ChatTurn):
         if turn.prompt != payload.message or not turn.context or turn.context.get('request') != request_context:
@@ -245,7 +261,11 @@ async def answer(conversation_id, payload, request, principal, db, identifier, r
               outcome="success" if documents else "no_visible_documents")
         arabic = any("\u0600" <= character <= "\u06ff" for character in payload.message)
         if not documents:
-            return "لا توجد ملفات متاحة في هذه المحادثة." if arabic else "No accessible spreadsheets were found here. Select an assigned project in Context to include its available documents, or attach a spreadsheet."
+            return "لا توجد ملفات متاحة في هذه المحادثة." if arabic else "No accessible spreadsheets were found in this conversation. Attach CSV or XLSX files to analyze."
+        if multi_project_documents:
+            check_integrity(config, documents)
+            record("Matched source projects across available project context")
+            return render_project_discovery(discover_projects(db, actor, documents))
         import re
 
         if re.search(r"session|validate|eligib|payment policy|الجلسات|تحقق", payload.message, re.I):
@@ -296,11 +316,15 @@ async def answer(conversation_id, payload, request, principal, db, identifier, r
         db.execute(text('BEGIN IMMEDIATE'))
         actor = current_principal(request, db)
         active_conversation = owned(db, actor, conversation_id)
+        available = resolve_documents(db, actor, identifier, payload.project_id, payload.document_ids)
+        if any(file.project_id is None for file, _ in available) or len({file.project_id for file, _ in available}) > 1:
+            record("Executing guarded global workflow with per-project receipts")
+            return run_global_workflow(db, actor, config, active_conversation, available,
+                                       workflow_id=workflow_id, request_id=request_id, on_step=record)
         if workflow_id in {'analyze_intake', 'process_activity'}:
             return handle_message(db, actor, config, active_conversation,
                                   'Analyze' if workflow_id == 'analyze_intake' else 'Process',
                                   payload.project_id, payload.document_ids, request_id)
-        available = resolve_documents(db, actor, identifier, payload.project_id, payload.document_ids)
         project_ids = {file.project_id for file, _ in available}
         project_id = payload.project_id or (next(iter(project_ids)) if len(project_ids) == 1 else None)
         if project_id is None:
@@ -335,7 +359,21 @@ async def answer(conversation_id, payload, request, principal, db, identifier, r
         document_used = True
     elif policy_lookup:
         if payload.project_id is None:
-            reply = "Select a project in Context to see its configured payment policy."
+            from .repositories import visible_projects
+            accessible = visible_projects(db, owner)
+            if not accessible:
+                reply = "No active projects are available."
+            else:
+                project_ids = [project.id for project in accessible]
+                families = dict(db.execute(select(project_table.c.id, project_table.c.policy_family).where(
+                    project_table.c.id.in_(project_ids))).all())
+                summaries = {
+                    "session": "SESSION — USD 25 per complete 3 validated credits; full six-session Trainer/Logistic activity and independent report/approval gates apply",
+                    "hours": "HOURS — USD 5/hour; per-shift nearest 30m, monthly whole-hour floor, USD 600/month per verified staff/project, 16 actual hours in any rolling 24h; no overtime or overnight premium",
+                }
+                reply = "Built-in payment policies for available projects (not editable):\n" + "\n".join(
+                    f"- {project.name}: {summaries.get(families.get(project.id), 'unassigned (legacy project)')}"
+                    for project in accessible) + "\nCalculation rules do not confer payment eligibility or export approval."
         else:
             principal.require("projects:read", payload.project_id)
             family = db.execute(select(project_table.c.policy_family).where(
@@ -344,11 +382,25 @@ async def answer(conversation_id, payload, request, principal, db, identifier, r
             if family == "session":
                 reply = "This project uses the fixed session-based policy. Project-specific rate and rule editing is disabled."
             elif family == "hours":
-                reply = ("This project uses the fixed hours-based policy family. "
-                         "Final hourly rules are awaiting explicit approval; amounts must not be guessed.")
+                reply = ("This project uses fixed HOURS rules: USD 5 per hour; nearest 30-minute "
+                         "shift rounding, monthly whole-hour flooring, USD 600 per verified staff "
+                         "per hours-based project per calendar month; max 16 actual nonoverlapping "
+                         "hours in any rolling 24h; no overtime or overnight premium. "
+                         "Financial eligibility, source authority and export remain separately gated.")
             else:
                 reply = "This legacy project's payment policy type needs administrator review."
         record("Checked project payment policy configuration")
+    elif multi_project_documents and STATUS.search(payload.message):
+        check_integrity(config, documents)
+        reply = global_workflow_status(db, principal, conversation, documents)
+        record("Read recorded global project workflow status")
+    elif multi_project_documents and choose_workflow(payload.message) in {'analyze_intake', 'process_activity', 'show_issues'}:
+        selection = choose_workflow(payload.message)
+        reply = run_global_workflow(db, principal, config, conversation, documents,
+                                    workflow_id=selection, request_id=request_id, on_step=record)
+        record("Recorded guarded per-project workflow steps for global conversation")
+        # Persist the actual bounded workflow receipt summary in chat history.
+        # Unlike ad-hoc source previews, it is safe and must survive reload.
     else:
         reply = handle_message(db, principal, config, conversation, payload.message, payload.project_id,
                                payload.document_ids, request_id)

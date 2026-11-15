@@ -1,4 +1,4 @@
-"""Private spreadsheet intake and project-scoped read tools."""
+"""Private spreadsheet intake and coordinator-global, permission-checked reads."""
 import csv
 from datetime import datetime, timezone
 from hashlib import sha256
@@ -25,7 +25,7 @@ MAX_COLUMNS = 100
 
 class DocumentView(BaseModel):
     id: str
-    project_id: int
+    project_id: int | None
     filename: str
     sha256: str
     rows: int
@@ -102,7 +102,11 @@ def scoped_documents(db, principal, conversation_id=None, *, purpose='timesheet'
         # Preserve their visibility without mixing in payment returns.
         (StoredFile.purpose.in_(('timesheet', 'intake')) if purpose == 'timesheet'
          else StoredFile.purpose == purpose),
-        StoredFile.project_id.in_(allowed),
+        or_(
+            StoredFile.project_id.in_(allowed),
+            # Global upload is visible only to the uploading actor.
+            (StoredFile.project_id.is_(None)) & (StoredFile.uploaded_by == principal.user.id),
+        ),
         or_((DocumentImport.conversation_id.is_(None)) & (StoredFile.uploaded_by == principal.user.id), DocumentImport.conversation_id.in_(own)),
     )
     if conversation_id is not None:
@@ -133,19 +137,26 @@ MEDIA = {
 
 
 @router.post("", status_code=201, response_model=DocumentView)
-async def upload(request: Request, principal: Authenticated, db: Database, project_id: int,
-                 filename: str, conversation_id: UUID | None = None,
+async def upload(request: Request, principal: Authenticated, db: Database, filename: str,
+                 project_id: int | None = None, conversation_id: UUID | None = None,
                  purpose: Literal['timesheet', 'payment_return'] = 'timesheet'):
     require_csrf(request, principal)
     # Workspace managers can ingest documents only in projects they can read.
     principal.require("projects:manage")
-    principal.require("timesheets.view", project_id)
+    if project_id is None:
+        if purpose != "timesheet" or conversation_id is None:
+            raise HTTPException(422, "Global intake requires an owned conversation and timesheet purpose")
+        if not any("timesheets.view" in keys and "projects:read" in keys
+                   for keys in principal.project_permissions.values()):
+            raise HTTPException(403, "No authorized projects for global intake")
+    else:
+        principal.require("timesheets.view", project_id)
     if purpose == 'payment_return':
         # Reuse existing privileges; no financial write permission is granted.
         principal.require("payments.view", project_id)
     identifier = str(conversation_id) if conversation_id else None
     conversation_owned(db, principal, identifier)
-    if db.scalar(select(projects.c.status).where(projects.c.id == project_id)) != "active":
+    if project_id is not None and db.scalar(select(projects.c.status).where(projects.c.id == project_id)) != "active":
         raise HTTPException(409, "Select an active project")
     extension = Path(filename).suffix.lower()
     media = request.headers.get("content-type", "").split(";")[0].strip().lower()
@@ -171,13 +182,20 @@ async def upload(request: Request, principal: Authenticated, db: Database, proje
     db.execute(text("BEGIN IMMEDIATE"))
     principal = current_principal(request, db)
     principal.require("projects:manage")
-    principal.require("timesheets.view", project_id)
+    if project_id is None:
+        if purpose != "timesheet" or conversation_id is None:
+            raise HTTPException(422, "Global intake requires an owned conversation and timesheet purpose")
+        if not any("timesheets.view" in keys and "projects:read" in keys
+                   for keys in principal.project_permissions.values()):
+            raise HTTPException(403, "No authorized projects for global intake")
+    else:
+        principal.require("timesheets.view", project_id)
     if purpose == 'payment_return':
         # Reuse existing privileges; no financial write permission is granted.
         principal.require("payments.view", project_id)
     require_csrf(request, principal)
     conversation_owned(db, principal, identifier)
-    if db.scalar(select(projects.c.status).where(projects.c.id == project_id)) != "active":
+    if project_id is not None and db.scalar(select(projects.c.status).where(projects.c.id == project_id)) != "active":
         raise HTTPException(409, "Select an active project")
 
     root = request.app.state.config.document_root.expanduser()
@@ -366,7 +384,7 @@ def persist_validation(project_id: int, request: Request, principal: Authenticat
     require_csrf(request, principal)
     principal.require("projects:manage")
     principal.require("timesheets.view", project_id)
-    if db.scalar(select(projects.c.status).where(projects.c.id == project_id)) != "active":
+    if project_id is not None and db.scalar(select(projects.c.status).where(projects.c.id == project_id)) != "active":
         raise HTTPException(409, "Select an active project")
     documents = resolve_documents(db, principal, None, project_id)
     cutoffs = project_report_cutoffs(db, project_id)
