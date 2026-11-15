@@ -293,7 +293,8 @@ def run_global_workflow(db, principal, config, conversation, documents, *, workf
             definitions[workflow_id].steps, evaluate,
             # These two handlers only inspect already-loaded evidence. Continue
             # them during planning review; keep validation/payment dependent.
-            independent_steps=('check_reports', 'select_timesheets'),
+            independent_steps=tuple(step for step in ('check_reports', 'select_timesheets')
+                                    if step in definitions[workflow_id].steps),
             on_result=(lambda receipt: on_step(
                 f"Project {project_id}: {receipt['step']} — {receipt['status']}" +
                 (' (not executed; dependency hold)' if receipt.get('attempted') is False else ''))
