@@ -107,7 +107,7 @@ def discover_projects(db, principal, documents):
     }
 
 
-def render_project_discovery(result, *, processing_requested=False):
+def render_project_discovery(result, *, processing_requested=False, workflow_receipts=False):
     lines = [
         f"Global spreadsheet intake: {result['files']} file(s), "
         f"{result['data_rows_with_project_fields']} project-bearing source rows, "
@@ -130,7 +130,11 @@ def render_project_discovery(result, *, processing_requested=False):
         lines.append("No project-identity conflicts identified in the recognized columns.")
     lines.append("Source-code matching is structural only. File uploads are not planning "
                  "approval, staff verification, external-report validation or payment authority.")
-    if processing_requested:
+    if workflow_receipts:
+        lines.append("Separate guarded per-project workflow receipts follow. "
+                     "Only intake/routing is verified; planning, reports, staff and money "
+                     "remain outside the current multi-project authority adapters.")
+    elif processing_requested:
         lines.append("MULTI_PROJECT_EXECUTION_ADAPTER_REQUIRED: The current workflow runner "
                      "still requires one verified project per run. No financial or planning "
                      "writes were attempted. Multi-project source splitting and separate "
