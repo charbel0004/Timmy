@@ -130,3 +130,35 @@ def run_global_workflow(db, principal, config, conversation, documents, *, workf
     report.append("No cross-project source registration, identity confirmation, "
                   "report validation, payment eligibility, export or settlement was performed.")
     return "\n".join(report)
+
+
+def global_workflow_status(db, principal, conversation, documents):
+    """Read the last committed workflow receipts; never claim a queued job."""
+    principal.require("projects:read")
+    runs = db.scalars(select(WorkflowRun).where(
+        WorkflowRun.actor_id == principal.user.id,
+        WorkflowRun.request_key.like(f"global:{conversation.id}:%"),
+    ).order_by(WorkflowRun.id.desc()).limit(100)).all()
+    if not runs:
+        return "No recorded global workflow execution exists for this conversation."
+    # Document authorization and actual bytes are rechecked by the request
+    # handler. Never display a run for a project whose access was revoked.
+    available = {f.id for f, _ in documents}
+    by_project = {}
+    for run in runs:
+        if "timesheets.view" not in principal.project_permissions.get(run.project_id, ()):
+            continue
+        if not set(run.snapshot.get("source_ids", [])) <= available:
+            continue
+        by_project.setdefault(run.project_id, run)
+    if not by_project:
+        return "No global workflow records are available under current document permissions."
+    lines = ["Recorded global workflow status (synchronous; no background queue):"]
+    for pid, run in sorted(by_project.items()):
+        lines.append(f"- Project {pid}: {run.workflow_id}, run #{run.id}, {run.status}.")
+        for step in run.snapshot["steps"]:
+            lines.append(f"  - {step['step']}: {step['status']}"
+                         + (f" ({', '.join(step['issue_codes'])})"
+                            if step["issue_codes"] else ""))
+    lines.append("Planning/report/staff approval and financial actions remain independently gated.")
+    return "\n".join(lines)
