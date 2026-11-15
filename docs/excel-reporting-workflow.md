@@ -121,3 +121,11 @@ the XLSX interchange boundary, avoiding the generated 15:49:59.999 export defect
 The hourly engine still rejects fractional-minute input; no source rounding or
 automatic evidence approval has been added. Upload the corrected set in a fresh
 conversation rather than combining old and corrected claim sheets.
+
+HOURS review scope is limited to activities in the current conversation's hourly
+claims, including malformed rows needing review. Historical registry activities
+and unrelated report cutoffs neither create additional review requirements nor
+invalidate the current review snapshot. Review fingerprint v3 separates corrected
+snapshots from older broad-scope receipts; originals and prior decisions remain.
+Deleting a conversation referenced by retained evidence/payment snapshots returns
+a clear 409 conflict and preserves history rather than triggering a server error.

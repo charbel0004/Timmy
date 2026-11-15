@@ -168,7 +168,11 @@ def confirm_columns(conversation_id: UUID, proposal_id: UUID, body: ConfirmMappi
 def delete_conversation(conversation_id: UUID, request: Request, principal: Authenticated, db: Database):
     require_csrf(request, principal)
     db.delete(owned(db, principal, conversation_id))
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(409, 'This conversation is referenced by retained workflow evidence or payment snapshots and cannot be deleted. Its history has been preserved.') from None
     return Response(status_code=204)
 
 
