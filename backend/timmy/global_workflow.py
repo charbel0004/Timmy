@@ -162,3 +162,51 @@ def global_workflow_status(db, principal, conversation, documents):
                             if step["issue_codes"] else ""))
     lines.append("Planning/report/staff approval and financial actions remain independently gated.")
     return "\n".join(lines)
+
+
+def global_conversation_state(db, principal, conversation):
+    """Project-global UI state derived solely from committed, scoped receipts."""
+    from .documents import resolve_documents
+    principal.require("projects:read")
+    docs = resolve_documents(db, principal, conversation.id, None, [])
+    visible = {f.id for f, _ in docs}
+    runs = db.scalars(select(WorkflowRun).where(
+        WorkflowRun.actor_id == principal.user.id,
+        WorkflowRun.request_key.like(f"global:{conversation.id}:%"),
+    ).order_by(WorkflowRun.id.desc()).limit(100)).all()
+    by_project = {}
+    for run in runs:
+        if "timesheets.view" not in principal.project_permissions.get(run.project_id, ()):
+            continue
+        if not set(run.snapshot.get("source_ids", [])) <= visible:
+            continue
+        by_project.setdefault(run.project_id, run)
+    if not by_project:
+        return None
+    items = [
+        {"project_id": pid, "workflow_id": run.workflow_id, "run_id": run.id,
+         "status": run.status,
+         "steps": [{"step": step["step"], "status": step["status"],
+                    "issue_codes": step["issue_codes"]}
+                   for step in run.snapshot["steps"]]}
+        for pid, run in sorted(by_project.items())
+    ]
+    selected_ids = sorted({fid for run in by_project.values()
+                           for fid in run.snapshot.get("source_ids", [])})
+    return {
+        "stage": "GLOBAL_WORKFLOW_RECORDED",
+        "scope": {
+            "project_ids": sorted(by_project),
+            "source_ids": selected_ids,
+            "source_rows": sum(record.row_count for file, record in docs if file.id in selected_ids),
+        },
+        "scope_fresh": True,
+        "mapping": None,
+        "validation": {"status": "blocked" if any(run.status == "blocked"
+                                                for run in by_project.values())
+                       else "completed"},
+        "blockers": ["PROJECT_SOURCE_MAPPING_CONFIRMATION_REQUIRED",
+                     "MULTI_PROJECT_VALIDATION_ADAPTER_REQUIRED"]
+                    if any(run.status == "blocked" for run in by_project.values()) else [],
+        "project_runs": items,
+    }
