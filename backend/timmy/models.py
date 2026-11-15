@@ -329,3 +329,29 @@ class ExternalReportVersion(Base):
     validated_at: Mapped[str | None] = mapped_column(Text)
     evidence_ref: Mapped[str] = mapped_column(Text)
     cutoff: Mapped[str | None] = mapped_column(Text)
+
+
+class ExecutionRun(Base):
+    __tablename__ = "execution_runs"
+    __table_args__ = (Index("ix_execution_runs_status_heartbeat", "status", "heartbeat_at"),
+                      Index("ix_execution_runs_actor_started", "actor_id", "started_at"))
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    trace_id: Mapped[str] = mapped_column(String(32), unique=True)
+    actor_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    conversation_id: Mapped[str | None] = mapped_column(String(36), index=True)
+    project_ids: Mapped[list] = mapped_column(JSON)
+    heartbeat_at: Mapped[str] = mapped_column(String(40))
+    access_grants: Mapped[dict] = mapped_column(JSON)
+    operation: Mapped[str] = mapped_column(String(100))
+    status: Mapped[str] = mapped_column(String(24))
+    started_at: Mapped[str] = mapped_column(String(40), index=True)
+    ended_at: Mapped[str | None] = mapped_column(String(40))
+
+
+class ExecutionEvent(Base):
+    __tablename__ = "execution_events"
+    __table_args__ = (UniqueConstraint("run_id", "sequence_number"),)
+    event_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    run_id: Mapped[str] = mapped_column(ForeignKey("execution_runs.id", ondelete="CASCADE"), index=True)
+    sequence_number: Mapped[int]
+    payload: Mapped[dict] = mapped_column(JSON)

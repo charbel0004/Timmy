@@ -1,3 +1,6 @@
+import { Observatory, ExecutionSummary } from "./observatory";
+import { MotionConfig, motion } from "motion/react";
+import { Menu, Moon, Sun } from "lucide-react";
 import { DemoWorkbook } from "./demo-workbook";
 import { workspaceLocation } from "./workspace-location";
 import { AccessManagement } from "./iam";
@@ -6,7 +9,7 @@ import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { api, ApiError, errorMessage } from "./api";
 import type { Session } from "./api";
-import { StructuralReview, Dashboard, DocumentHistory, Login, OperationsPage, SettingsPanel } from "./features";
+import { StructuralReview, LocalAI, Dashboard, DocumentHistory, Login, OperationsPage, SettingsPanel } from "./features";
 import { Badge, Brand, Icon } from "./design";
 import { Assistant, ConversationHistory } from "./assistant";
 
@@ -14,15 +17,19 @@ import type { ChatMessage, Conversation } from "./chat";
 import "./styles.css";
 
 const pages = {
-  assistant: "AI Assistant",
   dashboard: "Overview",
+  assistant: "AI Workspace",
   projects: "Projects",
   activities: "Activities",
   imports: "Timesheet Imports",
   timesheets: "Timesheets",
   discrepancies: "Discrepancies",
+  evidence: "Evidence Review",
   batches: "Payments",
-  access: "Access Management",
+  reconciliation: "Reconciliation",
+  observatory: "Execution Observatory",
+  reports: "Reports",
+  access: "Administration",
   users: "Users",
   roles: "Roles & Permissions",
   settings: "Settings",
@@ -31,6 +38,9 @@ const pages = {
 type Page = keyof typeof pages;
 
 function Workspace({ session, onExit, onSession }: { session: Session; onExit: () => void; onSession: (session: Session) => void }) {
+  const [theme, setTheme] = useState(() => localStorage.getItem("timmy-theme") || (matchMedia('(prefers-color-scheme: dark)').matches ? "dark" : "light"));
+  const [collapsed, setCollapsed] = useState(false);
+  useEffect(() => { document.documentElement.dataset.theme = theme; localStorage.setItem("timmy-theme", theme); }, [theme]);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeId, setActiveId] = useState<string>();
   const [chatVersion, setChatVersion] = useState(0);
@@ -38,6 +48,8 @@ function Workspace({ session, onExit, onSession }: { session: Session; onExit: (
   const [chatBusy, setChatBusy] = useState(false);
   const [hash, setHash] = useState(() => window.location.hash);
   const location = workspaceLocation(hash);
+  if (hash.startsWith("#observatory/")) location.page = "observatory";
+  if (/^#assistant\/[0-9a-f-]{36}$/.test(hash)) location.page = "assistant";
   const page: Page = Object.hasOwn(pages, location.page) ? location.page as Page : "assistant";
   const { validationId } = location;
   const [error, setError] = useState("");
@@ -48,15 +60,18 @@ function Workspace({ session, onExit, onSession }: { session: Session; onExit: (
     return () => window.removeEventListener("hashchange", change);
   }, []);
   const canReadSettings = session.permissions.includes("settings:read");
-  const visible = (key: Page) => key === "security" || session.permissions.includes(
-    key === "settings" ? "settings:read" : (key === "users" || key === "access") ? "users:manage" : key === "roles" ? "roles:read" : "projects:read",
+  const hasGrant = (permission: string) => session.permissions.includes(permission) || Object.values(session.project_permissions).some((grants) => grants.includes(permission));
+  const visible = (key: Page) => key === "security" || hasGrant(
+    key === "settings" ? "settings:read" : (key === "users" || key === "access") ? "users:manage" : key === "roles" ? "roles:read"
+      : key === "activities" ? "activities.view" : ["imports", "timesheets", "evidence"].includes(key) ? "timesheets.view"
+        : key === "discrepancies" ? "discrepancies.view" : ["batches", "reconciliation"].includes(key) ? "payments.view" : "projects:read",
   );
   const canReadProjects = session.permissions.includes("projects:read");
   useEffect(() => {
     if (!canReadProjects) return;
     let active = true;
     api.conversations().then(
-      (items) => { if (active) setConversations(items); },
+      (items) => { if (active) setConversations(current => items.map(item => current.find(existing => existing.id === item.id) ?? item)); },
       (error) => { if (active) setHistoryError(errorMessage(error)); },
     );
     return () => { active = false; };
@@ -69,7 +84,7 @@ function Workspace({ session, onExit, onSession }: { session: Session; onExit: (
     try {
       if (id) {
         const item = await api.conversation(id);
-        setConversations((current) => current.map((entry) => entry.id === id ? item : entry));
+        setConversations((current) => [item, ...current.filter(entry => entry.id !== id)]);
       }
       setActiveId(id);
       setChatVersion((current) => current + 1);
@@ -80,6 +95,11 @@ function Workspace({ session, onExit, onSession }: { session: Session; onExit: (
       setChatBusy(false);
     }
   }
+
+  useEffect(() => {
+    const target = /^#assistant\/([0-9a-f-]{36})$/.exec(hash)?.[1];
+    if (target && target !== activeId && !chatBusy) void openConversation(target);
+  }, [hash]);
 
   function append(id: string, ...messages: ChatMessage[]) {
     setActiveId(id);
@@ -120,12 +140,12 @@ function Workspace({ session, onExit, onSession }: { session: Session; onExit: (
   }
   return <>
     <a className="sr-only focus:not-sr-only" href="#main" onClick={(event) => { event.preventDefault(); document.getElementById("main")?.focus(); }}>Skip to content</a>
-    <div className="workspace">
+    <MotionConfig reducedMotion="user" transition={{ duration: 0.2 }}><div className={`workspace${collapsed ? " sidebar-collapsed" : ""}`}>
       <aside className="sidebar glass-panel">
         <Brand />
         <nav aria-label="Workspace">
           {(Object.keys(pages) as Page[]).filter((key) => visible(key) && key !== "users" && key !== "roles").map((key) =>
-            <a key={key} href={`#${key}`} aria-current={key === page ? "page" : undefined}>
+            <a key={key} href={`#${key}`} aria-label={pages[key]} title={pages[key]} aria-current={key === page ? "page" : undefined}>
               <Icon name={key} /><span>{pages[key]}</span>
             </a>)}
         </nav>
@@ -137,14 +157,17 @@ function Workspace({ session, onExit, onSession }: { session: Session; onExit: (
       </aside>
       <div className="workspace-body">
         <header className="topbar glass-panel">
-          <span className="topbar-title">{pages[page]}</span>
+          <div className="topbar-context"><button className="secondary shell-toggle" aria-label="Toggle navigation" aria-expanded={!collapsed} onClick={() => setCollapsed(!collapsed)}><Menu size={17} /></button><span className="muted">Workspace /</span><span className="topbar-title">{pages[page]}</span></div>
           <div className="account">
+            {canReadProjects && <div className="topbar-system-status" title="Ollama status checked when the workspace opens"><LocalAI /></div>}
+            <a href="#security" className="account-link">{session.username}<small>{session.role}</small></a>
+            <button className="secondary theme-toggle" aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`} onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}>{theme === 'dark' ? <Sun size={17} /> : <Moon size={17} />}</button>
             {session.demo_mode && <Badge tone="amber">Demo mode</Badge>}
 
           </div>
         </header>
-        <main id="main" tabIndex={-1} className="workspace-content">
-          {page !== "dashboard" && page !== "assistant" && !["access", "users", "roles"].includes(page) && <h1 className="page-heading">{pages[page]}</h1>}
+        <motion.main key={page} initial={{ opacity: 0 }} animate={{ opacity: 1 }} id="main" tabIndex={-1} className="workspace-content">
+          {page !== "observatory" && page !== "dashboard" && page !== "assistant" && !["access", "users", "roles"].includes(page) && <h1 className="page-heading">{pages[page]}</h1>}
           {error && <p role="alert" className="mb-4">{error}</p>}
           {page === "assistant" && <>
             {historyError && <p role="alert">{historyError}</p>}
@@ -155,21 +178,25 @@ function Workspace({ session, onExit, onSession }: { session: Session; onExit: (
           {session.demo_mode && (page === "dashboard" || page === "projects" || page === "imports" || page === "batches")
             && <DemoWorkbook key={page} show={page} />}
           {page === "dashboard" && (canReadProjects ? <Dashboard /> : <p role="alert">Permission denied.</p>)}
+          {page === "observatory" && canReadProjects && <Observatory />}
+          {page === "reports" && canReadProjects && <ExecutionSummary />}
+          {page === "reconciliation" && visible(page) && <section className="glass-panel operation-panel"><h2>External payment reconciliation</h2><p className="muted">Use the existing guarded reconciliation workflow in AI Workspace with the payment report attached. Its stored receipts identify source evidence, unmatched records, and approval blockers.</p><a href="#assistant" className="hero-action">Open reconciliation workspace →</a><p className="muted">External settlement remains a separate source of authority. The payment obligation summary adapter is unavailable.</p></section>}
           {page === "settings" && (canReadSettings ? <SettingsPanel /> : <p role="alert">Permission denied.</p>)}
           {(page === "projects" || page === "activities") &&
             (visible(page) ? <Administration key={page} page={page} session={session} /> : <p role="alert">Permission denied.</p>)}
           {(page === "access" || page === "users" || page === "roles") &&
             (visible("access") ? <AccessManagement session={session} /> : <p role="alert">Permission denied.</p>)}
-          {page === "imports" && canReadProjects && <><DocumentHistory /><StructuralReview key={validationId ?? "project"} session={session} validationId={validationId} /></>}
+          {page === "evidence" && visible(page) && <StructuralReview session={session} />}
+          {page === "imports" && visible(page) && <><DocumentHistory /><StructuralReview key={validationId ?? "project"} session={session} validationId={validationId} /></>}
           {(page === "imports" || page === "timesheets" || page === "discrepancies" || page === "batches") &&
             (canReadProjects ? <OperationsPage key={page} section={page} /> : <p role="alert">Permission denied.</p>)}
           {page === "security" && <PasswordScreen session={session} onDone={(value) => {
             if (value) { onSession(value); window.location.hash = "assistant"; }
           }} />}
 
-        </main>
+        </motion.main>
       </div>
-    </div>
+    </div></MotionConfig>
   </>;
 }
 

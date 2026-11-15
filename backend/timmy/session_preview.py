@@ -1,10 +1,20 @@
 """Read-only checks of spreadsheet claims. Uploaded reference rows are provisional."""
+from .observability import instrument
+
 import re
 from collections import Counter, defaultdict
 from dataclasses import replace
 from datetime import date
 
-from .session_rules import Claim, coverage
+from .session_rules import Claim, coverage as deterministic_coverage
+from .observability import reference, span
+
+def coverage(*args, **kwargs):
+    with span("session_rules.coverage", "rule") as observation:
+        result = deterministic_coverage(*args, **kwargs)
+        observation["status"] = "completed" if result.complete else "needs_review"
+        reference("session_rules.coverage", "executed", "application-code", status=observation["status"])
+        return result
 
 TIMESHEET = {"project_code", "activity_code", "staff_id", "role", "session_number",
              "work_date", "timesheet_submitted_date"}
@@ -27,6 +37,7 @@ def escape(value):
     return re.sub(r"([^\w\s])", r"\\\1", " ".join(value.split()))
 
 
+@instrument("session.preview", "rule")
 def preview(documents, *, snapshot=None, report_cutoffs=None, activity_registry=None, project_codes=None):
     plans = defaultdict(set)
     directory = defaultdict(set)

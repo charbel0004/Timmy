@@ -22,10 +22,10 @@ export class ApiError extends Error {
   constructor(readonly status: number, message: string) { super(message); }
 }
 
-const base = import.meta.env.VITE_API_URL ?? "http://localhost:8000/api";
+export const apiBase = import.meta.env.VITE_API_URL ?? "http://localhost:8000/api";
 
 export async function rawRequest(path: string, init?: RequestInit): Promise<Response> {
-  const response = await fetch(base + path, { ...init, credentials: "include" });
+  const response = await fetch(apiBase + path, { ...init, credentials: "include" });
   if (!response.ok) {
     const body = await response.json().catch(() => null);
     throw new ApiError(response.status, body?.detail ?? "Request failed");
@@ -53,7 +53,7 @@ export interface ConversationWorkflow {
   validation?: { status: string; run_id?: number; started_at?: string; completed_at?: string; error_code?: string } | null;
   blockers?: string[];
 }
-export const documentDownload = (id: string) => `${base}/documents/${id}/download`;
+export const documentDownload = (id: string) => `${apiBase}/documents/${id}/download`;
 
 export const api = {
   workflowState: (conversation: string) => request<ConversationWorkflow>(`/chat/conversations/${conversation}/workflow`),

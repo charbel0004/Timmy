@@ -4,6 +4,8 @@ All calls run under the chat/API transaction and refreshed principal. The only
 validation performed here is structural; source/identity/report/payment authority
 remains separate. No background queue is created or claimed.
 """
+from .observability import instrument, current, parent
+
 import copy
 import json
 import logging
@@ -59,6 +61,11 @@ def save_state(conversation, state):
     # fields. SQLAlchemy needs a fresh JSON object for nested changes.
     validate_state_change(conversation.workflow_state, state)
     conversation.workflow_state=copy.deepcopy(state)
+    if state.get('stage') in {'MAPPING_UNDER_REVIEW', 'HUMAN_REVIEW_REQUIRED'}:
+        trace = current.get()
+        if trace:
+            trace.emit('span.started', parent_id=parent.get() or trace.root, status='needs_review',
+                       category='approval', operation=state['stage'])
 
 
 def require_scope(db,principal,conversation,state):
@@ -218,6 +225,7 @@ def start_mapping(db,principal,config,conversation,project_id,document_ids,force
     return proposal_text(proposal,scope)
 
 
+@instrument("structural.validate", "validation")
 def complete_validation(db,principal,config,conversation,proposal,documents,state):
     from .planning_activities import register_planning
     try:
@@ -286,6 +294,7 @@ def complete_validation(db,principal,config,conversation,proposal,documents,stat
     return status_text(state)
 
 
+@instrument("mapping.confirm", "approval")
 def confirm_mapping(db,principal,config,conversation,proposal_id,version,fingerprint_value,selections=None):
     state=copy.deepcopy(conversation.workflow_state or {})
     principal.require('projects:manage')
@@ -322,6 +331,7 @@ def confirm_mapping(db,principal,config,conversation,proposal_id,version,fingerp
     return complete_validation(db,principal,config,conversation,proposal,documents,state)
 
 
+@instrument("conversation.workflow", "internal_tool")
 def handle_message(db,principal,config,conversation,message,project_id,document_ids,request_id):
     """Return None only for non-workflow conversation. No model status/confirmation."""
     state=copy.deepcopy(conversation.workflow_state or {})

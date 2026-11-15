@@ -120,3 +120,25 @@ example does not create a payment obligation.
 The isolated workbook runner covers the synthetic per-session and hourly
 demo policies, with an evaluation-only reconciliation projection before
 human authorization. See [Workbook demonstration](architecture/demo-workbook.md).
+
+## Execution observability (0019)
+
+Execution metadata is diagnostic evidence, not payment authority. Parent spans,
+explicit workflow dependency links, deterministic outcomes and human-review
+checkpoints reflect invoked application code. Uninvoked dependent steps remain
+business receipts and do not become fake executed graph nodes. Original imports,
+calculation code, immutable financial snapshots and human approval controls are
+unchanged.
+
+Open domain/integration rules remain unresolved: authoritative entitlement and
+outstanding-obligation dashboard adapters, trusted settlement/report providers,
+and unavailable approved export adapters cannot be inferred from telemetry.
+Their summaries display unavailable. The note compiler remains disconnected from
+runtime retrieval. No MCP runtime exists to instrument. Current Ollama routing
+returns validated structured JSON, not a token response stream or document
+citation protocol. The UI streams execution events and does not fabricate token
+estimates, citations or hidden reasoning. A future remote Ollama telemetry source
+requires an explicitly authorized remote adapter; loopback-only defaults remain.
+
+See [architecture map](observability/architecture.md) and
+[implementation, verification and rollout](observability/implementation.md).

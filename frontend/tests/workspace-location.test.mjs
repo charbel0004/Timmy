@@ -10,3 +10,7 @@ test("chat review links retain the exact snapshot and generic navigation clears 
   assert.equal(workspaceLocation("#imports/validation/0").validationId, undefined);
   assert.equal(workspaceLocation("#imports/validation/42/extra").validationId, undefined);
 });
+
+test("dashboard drill-down keeps the page while retaining a filter query", () => {
+  assert.deepEqual(workspaceLocation("#projects?status=active"), { page: "projects", validationId: undefined });
+});

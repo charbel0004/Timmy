@@ -10,6 +10,7 @@ export interface ChatMessage {
   tables?: ChatTable[];
   activity?: string[];
   requestId?: string;
+  executionId?: string;
 }
 export interface ChatRequest {
   conversationId: string;

@@ -1,3 +1,4 @@
+from .observability import instrument
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -74,7 +75,7 @@ async def respond(adapter: OllamaAdapter, context: list[dict[str, str]], project
             "يمكنك الاطلاع على مشاريعك الحالية في صفحة النظرة العامة."
             if any("\u0600" <= char <= "\u06ff" for char in context[-1]["content"])
             else "Your current project assignments are available in Overview."
-        ), projects()
+        ), instrument("projects.list", "internal_tool")(projects)()
     if not proposal.answer.strip():
         raise OllamaExtractionError("schema_validation")
     # Unbound conversational prose is not a workflow receipt. This final guard

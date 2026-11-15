@@ -12,6 +12,7 @@ from uuid import uuid4
 from collections.abc import Callable, Sequence
 from typing import TypedDict
 
+from .observability import span, reference, current as active_trace, parent as active_parent
 from langgraph.graph import END, START, StateGraph
 
 logger = logging.getLogger(__name__)
@@ -76,11 +77,13 @@ def execute_graph(
     receipts: list[dict] = []
     graph = StateGraph(ExecutionState)
     previous = START
+    last_invoked = None
 
     for index, step in enumerate(steps):
         name = f"step_{index}"
 
         def execute(state: ExecutionState, *, current: str = step) -> ExecutionState:
+            nonlocal last_invoked
             blocked_by = state.get("blocked_by")
             if blocked_by is not None:
                 result = dependency_hold(
@@ -89,10 +92,19 @@ def execute_graph(
                 )
             else:
                 try:
-                    result = evaluator(current)
-                    if (not isinstance(result, dict) or result.get("step") != current
-                            or result.get("status") not in VALID_OUTCOMES):
-                        result = safe_failure(current, "INVALID_STEP_RESULT")
+                    with span(current, 'validation') as observation:
+                        trace = active_trace.get()
+                        invoked = active_parent.get()
+                        if trace and last_invoked:
+                            trace.emit('span.link', invoked, parent_id=trace.root,
+                                       category='dependency', operation='depends_on', reference_id=last_invoked)
+                        last_invoked = invoked
+                        result = evaluator(current)
+                        if (not isinstance(result, dict) or result.get("step") != current
+                                or result.get("status") not in VALID_OUTCOMES):
+                            result = safe_failure(current, "INVALID_STEP_RESULT")
+                        observation['status'] = result['status']
+                        reference(current, 'executed', 'application-code', status=result['status'])
                 except Exception as error:
                     # Raw exception text may contain private spreadsheet values.
                     logger.error("Workflow step failed step=%s error_type=%s",

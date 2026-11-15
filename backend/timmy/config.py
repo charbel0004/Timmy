@@ -1,6 +1,6 @@
 from functools import lru_cache
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 from urllib.parse import urlsplit
 
 from pydantic import Field, field_validator
@@ -13,6 +13,12 @@ class Settings(BaseSettings):
         env_file=Path(__file__).resolve().parents[2] / ".env",
         extra="ignore",
     )
+
+    telemetry_enabled: bool = True
+    telemetry_model_process_source: Literal["local", "unavailable"] = "local"
+    telemetry_sample_seconds: float = Field(default=3, ge=1, le=60)
+    telemetry_retention_days: int = Field(default=14, ge=1, le=365)
+    telemetry_max_events: int = Field(default=2000, ge=100, le=10000)
 
     database_url: str = "sqlite:///./timmy.db"
     frontend_origin: str = "http://localhost:5173"
