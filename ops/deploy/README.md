@@ -98,3 +98,27 @@ both slot and public readiness. Create the root-owned
 verifying the patched release. Then rerun the failed deploy for the latest
 CI-verified main SHA. Subsequent additive releases use the declaration and
 existing runner.
+
+### Reviewed observability transition (0018 → 0019)
+
+The candidate manifest now pins the exact 0019 telemetry migration blob. Relative
+to active release `da97587e7f0006c6a04c79e77efbafbbfe972da3`, this is the only
+migration-tree change. It adds telemetry tables and indexes without rewriting
+existing business tables. Regression tests run the actual archived active backend
+against the expanded database and verify health, login, and scoped project reads.
+Backend CI fetches history for this compatibility regression. The existing
+populated-upgrade test also verifies original rows and columns are preserved.
+
+Use the existing verified-main deployment workflow after CI succeeds. Its existing
+manifest reader checks the precise added path and Git blob, verifies live revision
+0018 and candidate head 0019, backs up and checks SQLite, applies the migration,
+and checks the old slot's health before switching. Do not rerun the older 7a8c6ae
+candidate: its manifest still declares the previous transition. Deploy the new
+verified main SHA containing this correction. No server-script reinstall or
+removal of the migration gate is required when the installed deployer has the
+manifest reader shown above. If the installed root-owned script predates that
+reader, install the reviewed deploy script through the existing operator process.
+
+For rollback, retain schema 0019 and switch application code to the compatible
+0018 release using the existing rollback command. The manifest reader validates
+the reverse relationship. Never restore a pre-migration backup over live writes.
