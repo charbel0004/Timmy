@@ -21,6 +21,8 @@ from .repositories import visible_projects
 from .workflows import run_workflow, render_run
 from .documents import project_report_cutoffs
 from .conversation_workflow import handle_message, public_state, confirm_mapping
+from .project_discovery import discover_projects, render_project_discovery
+from .workflows import choose_workflow
 from .failure_diagnostics import classify
 
 router = APIRouter(prefix="/api/chat/conversations")
@@ -208,6 +210,10 @@ async def answer(conversation_id, payload, request, principal, db, identifier, r
     effective_ids = saved_scope.get('source_ids', []) if inherited_scope else payload.document_ids
     documents = [] if policy_lookup else resolve_documents(db, principal, identifier, effective_project, effective_ids)
     source_ids = [file.id for file, _ in documents]
+    multi_project_documents = bool(documents) and (
+        any(file.project_id is None for file, _ in documents)
+        or len({file.project_id for file, _ in documents}) > 1
+    )
 
     def replay(turn: ChatTurn):
         if turn.prompt != payload.message or not turn.context or turn.context.get('request') != request_context:
@@ -245,7 +251,10 @@ async def answer(conversation_id, payload, request, principal, db, identifier, r
               outcome="success" if documents else "no_visible_documents")
         arabic = any("\u0600" <= character <= "\u06ff" for character in payload.message)
         if not documents:
-            return "لا توجد ملفات متاحة في هذه المحادثة." if arabic else "No accessible spreadsheets were found here. Select an assigned project in Context to include its available documents, or attach a spreadsheet."
+            return "لا توجد ملفات متاحة في هذه المحادثة." if arabic else "No accessible spreadsheets were found in this conversation. Attach CSV or XLSX files to analyze."
+        if multi_project_documents:
+            record("Matched source projects across available project context")
+            return render_project_discovery(discover_projects(db, actor, documents))
         import re
 
         if re.search(r"session|validate|eligib|payment policy|الجلسات|تحقق", payload.message, re.I):
@@ -301,6 +310,9 @@ async def answer(conversation_id, payload, request, principal, db, identifier, r
                                   'Analyze' if workflow_id == 'analyze_intake' else 'Process',
                                   payload.project_id, payload.document_ids, request_id)
         available = resolve_documents(db, actor, identifier, payload.project_id, payload.document_ids)
+        if any(file.project_id is None for file, _ in available) or len({file.project_id for file, _ in available}) > 1:
+            record("Blocked multi-project workflow until guarded project-specific execution is implemented")
+            return render_project_discovery(discover_projects(db, actor, available), processing_requested=True)
         project_ids = {file.project_id for file, _ in available}
         project_id = payload.project_id or (next(iter(project_ids)) if len(project_ids) == 1 else None)
         if project_id is None:
@@ -335,7 +347,17 @@ async def answer(conversation_id, payload, request, principal, db, identifier, r
         document_used = True
     elif policy_lookup:
         if payload.project_id is None:
-            reply = "Select a project in Context to see its configured payment policy."
+            from .repositories import visible_projects
+            accessible = visible_projects(db, owner)
+            if not accessible:
+                reply = "No active projects are available."
+            else:
+                project_ids = [project.id for project in accessible]
+                families = dict(db.execute(select(project_table.c.id, project_table.c.policy_family).where(
+                    project_table.c.id.in_(project_ids))).all())
+                reply = "Fixed payment-policy families by project (no editable monetary parameters):\\n" + "\\n".join(
+                    f"- {project.name}: {families.get(project.id) or 'not assigned (legacy project)'}"
+                    for project in accessible)
         else:
             principal.require("projects:read", payload.project_id)
             family = db.execute(select(project_table.c.policy_family).where(
@@ -349,6 +371,12 @@ async def answer(conversation_id, payload, request, principal, db, identifier, r
             else:
                 reply = "This legacy project's payment policy type needs administrator review."
         record("Checked project payment policy configuration")
+    elif multi_project_documents and choose_workflow(payload.message) in {'analyze_intake', 'process_activity'}:
+        requested = choose_workflow(payload.message) == 'process_activity'
+        reply = render_project_discovery(discover_projects(db, principal, documents), processing_requested=requested)
+        record("Matched global multi-project documents and verified row-level project references")
+        # Only source inspection; never run the legacy single-project state machine.
+        document_used = True
     else:
         reply = handle_message(db, principal, config, conversation, payload.message, payload.project_id,
                                payload.document_ids, request_id)
