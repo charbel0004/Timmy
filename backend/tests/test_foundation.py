@@ -211,7 +211,8 @@ def test_workspace_onboarding_and_lifecycle(client):
     assert created.status_code == 201
     identifier = created.json()["id"]
     project = f"{base}/projects/{identifier}"
-    for action in ("activate", "complete", "archive", "restore"):
+    assert client.post(f"{project}/transition", headers=headers, json={"action": "activate"}).status_code == 409
+    for action in ("complete", "archive", "restore"):
         assert client.post(f"{project}/transition", headers=headers, json={"action": action}).status_code == 204
     assert client.delete(f"{base}/projects/2?confirmed=true", headers=headers).status_code == 204
     with Session(client.app.state.engine) as db, db.begin():
