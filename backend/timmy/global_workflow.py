@@ -20,7 +20,8 @@ from .workflow_graph import execute_graph
 from .workflows import knowledge, step_result
 
 
-def run_global_workflow(db, principal, config, conversation, documents, *, workflow_id, request_id):
+def run_global_workflow(db, principal, config, conversation, documents, *, workflow_id, request_id,
+                        on_step=None):
     """Execute bounded, truthful LangGraph receipts per authorized project.
 
     The original workbook's bytes and owner are verified on each request.
@@ -88,7 +89,12 @@ def run_global_workflow(db, principal, config, conversation, documents, *, workf
                 ["MULTI_PROJECT_VALIDATION_ADAPTER_REQUIRED",
                  "PROJECT_SOURCE_MAPPING_CONFIRMATION_REQUIRED"])
 
-        results = execute_graph(definitions[workflow_id].steps, evaluate)
+        results = execute_graph(
+            definitions[workflow_id].steps, evaluate,
+            on_result=(lambda receipt: on_step(
+                f"Project {project_id}: {receipt['step']} — {receipt['status']}")
+                       if on_step else None),
+        )
         status = ("blocked" if any(x["status"] == "blocked" for x in results)
                   else "needs_review" if any(x["status"] == "needs_review" for x in results)
                   else "completed")
