@@ -18,7 +18,6 @@ from .auth import (
 from .models import LoginSession, Role, User, activities, imports, payment_policies, project_memberships, projects
 from .models import AuditEvent, StoredFile, project_permission_overrides, project_roles, role_permissions, user_roles
 from .authorization import CATALOG, DELEGABLE, effective_access
-from .payment_configuration import PolicyConfiguration, save_draft
 from .repositories import find_user
 from .routes import session_view
 from .auth import current_principal, principal_for
@@ -97,7 +96,7 @@ class ProjectInput(Payload):
 
 
 class ProjectCreate(ProjectInput):
-    payment_policy: PolicyConfiguration | None = None
+    policy_family: Literal["session", "hours"]
     status: Literal["draft", "active"] = "draft"
 
 
@@ -311,7 +310,7 @@ def change_password(body: PasswordChange, request: Request, response: Response, 
 @router.get("/projects")
 def project_list(principal: Authenticated, db: Database):
     principal.require("projects:read")
-    query = select(projects.c.id, projects.c.name, projects.c.project_code, projects.c.status)
+    query = select(projects.c.id, projects.c.name, projects.c.project_code, projects.c.policy_family, projects.c.status)
     if "projects:manage" not in principal.permissions:
         query = query.where(projects.c.id.in_([key for key, permissions in principal.project_permissions.items() if "projects:read" in permissions]))
     return [dict(row) for row in db.execute(query.order_by(projects.c.name)).mappings()]
@@ -330,13 +329,11 @@ def create_project(body: ProjectCreate, request: Request, principal: Authenticat
     require_csrf(request, principal)
     try:
         identifier = db.execute(insert(projects).values(
-            name=body.name, project_code=body.code, status=body.status,
+            name=body.name, project_code=body.code, policy_family=body.policy_family, status=body.status,
         )).inserted_primary_key[0]
     except IntegrityError:
         raise HTTPException(409, "Project code already exists") from None
     db.execute(insert(project_memberships).values(project_id=identifier, user_id=principal.user.id))
-    if body.payment_policy:
-        save_draft(db, identifier, principal.user.id, body.payment_policy)
     audit(db, "project_created", principal.user.id, resource_type="project", resource_id=str(identifier))
     commit(db)
     return {"id": identifier}
