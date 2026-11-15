@@ -58,11 +58,19 @@ def test_global_chat_upload_maps_both_projects_and_stops_financial_work(client, 
     assert "UNKNOWN_PROJECT_CODE: 1" in analyzed
     assert "no per-project validation" in analyzed.lower()
     processed = message("Process both project timesheets")
-    assert "MULTI_PROJECT_EXECUTION_ADAPTER_REQUIRED" in processed
-    assert "no financial or planning" in processed.lower()
+    assert "MULTI_PROJECT_VALIDATION_ADAPTER_REQUIRED" in processed
+    assert "No cross-project source registration" in processed
+    assert "check_planning" in processed
 
     with Session(client.app.state.engine) as db:
-        assert db.scalar(select(func.count()).select_from(WorkflowRun)) == 0
+        runs = db.scalars(select(WorkflowRun).order_by(WorkflowRun.id)).all()
+        assert [(run.project_id, run.workflow_id, run.status) for run in runs] == [
+            (1, "analyze_intake", "completed"),
+            (2, "analyze_intake", "completed"),
+            (1, "process_activity", "blocked"),
+            (2, "process_activity", "blocked"),
+        ]
+        assert all(run.snapshot["payment_authority"] == "none" for run in runs)
         saved = db.get(StoredFile, doc["id"])
         assert saved is not None and saved.project_id is None
 
