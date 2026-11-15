@@ -144,7 +144,7 @@ async def upload(request: Request, principal: Authenticated, db: Database, filen
     # Workspace managers can ingest documents only in projects they can read.
     principal.require("projects:manage")
     if project_id is None:
-        if purpose != "timesheet" or (identifier if 'identifier' in locals() else conversation_id) is None:
+        if purpose != "timesheet" or conversation_id is None:
             raise HTTPException(422, "Global intake requires an owned conversation and timesheet purpose")
         if not any("timesheets.view" in keys and "projects:read" in keys
                    for keys in principal.project_permissions.values()):
@@ -183,7 +183,7 @@ async def upload(request: Request, principal: Authenticated, db: Database, filen
     principal = current_principal(request, db)
     principal.require("projects:manage")
     if project_id is None:
-        if purpose != "timesheet" or (identifier if 'identifier' in locals() else conversation_id) is None:
+        if purpose != "timesheet" or conversation_id is None:
             raise HTTPException(422, "Global intake requires an owned conversation and timesheet purpose")
         if not any("timesheets.view" in keys and "projects:read" in keys
                    for keys in principal.project_permissions.values()):
