@@ -61,6 +61,18 @@ def test_global_chat_upload_maps_both_projects_and_stops_financial_work(client, 
     assert "MULTI_PROJECT_VALIDATION_ADAPTER_REQUIRED" in processed
     assert "No cross-project source registration" in processed
     assert "check_planning" in processed
+    state = client.get(f"/api/chat/conversations/{cid}/workflow")
+    assert state.status_code == 200, state.text
+    global_state = state.json()
+    assert global_state["stage"] == "GLOBAL_WORKFLOW_RECORDED"
+    assert global_state["scope"]["project_ids"] == [1, 2]
+    assert len(global_state["project_runs"]) == 2
+    assert all(run["status"] == "blocked" for run in global_state["project_runs"])
+    status_text = message("Is it done?")
+    assert "Recorded global workflow status" in status_text
+    assert "run #" in status_text
+    history = client.get(f"/api/chat/conversations/{cid}").json()
+    assert "MULTI_PROJECT_VALIDATION_ADAPTER_REQUIRED" in history["messages"][-3]["text"]
 
     with Session(client.app.state.engine) as db:
         runs = db.scalars(select(WorkflowRun).order_by(WorkflowRun.id)).all()
