@@ -323,7 +323,14 @@ export function Assistant({ conversation, append, canReadProjects, csrfToken, on
         {workflow?.scope && <div role="status" aria-label="Persisted workflow state">
           <p>Workflow: {workflow.stage} · {workflow.scope.source_ids.length} files · {workflow.scope.source_rows} source rows in scope.</p>
           {workflow.mapping?.confirmation_method === "verified_format_reuse" && <p>Using your previously confirmed column format; routine checks continued automatically.</p>}
-          {workflow.validation && <p>Structural validation: {workflow.validation.status}
+          {!!workflow.project_runs?.length && <div role="region" aria-label="Recorded project workflow steps">
+            {workflow.project_runs.map((run) => <details key={run.project_id} open>
+              <summary>Project {run.project_id} · {run.workflow_id} · Run #{run.run_id} · {run.status}</summary>
+              <ol>{run.steps.map((step, index) => <li key={index}>{step.step}: {step.status}
+                {step.issue_codes.length > 0 ? ` · ${step.issue_codes.join(", ")}` : ""}</li>)}</ol>
+            </details>)}
+          </div>}
+          {workflow.validation && <p>{workflow.project_runs?.length ? "Global routing" : "Structural validation"}: {workflow.validation.status}
             {workflow.validation.run_id && ` · Run #${workflow.validation.run_id}`}
             {workflow.validation.error_code && ` · ${workflow.validation.error_code}`}</p>}
           {workflow.scope_fresh === false && <p>The source scope changed. Request Process to review a fresh mapping proposal.</p>}
