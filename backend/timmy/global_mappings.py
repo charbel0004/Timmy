@@ -33,11 +33,20 @@ def proposals(db,principal,conversation,documents,project_ids,create=False):
             version=(db.scalar(select(func.max(MappingProposal.version)).where(
                 MappingProposal.conversation_id==conversation.id)) or 0)+1
             confirmed=reuse_approved_formats(db,principal.user.id,project,sheets)
+            automatic=False
+            if not confirmed and sheets and not mapping_errors(sheets) and all(
+                    sheet.get('confidence')=='high' for sheet in sheets):
+                # Fully confident header mapping: apply it and keep a correction
+                # path (confirmed_by stays empty until a human re-confirms).
+                confirmed=copy.deepcopy(sheets);automatic=True
             item=MappingProposal(conversation_id=conversation.id,actor_id=principal.user.id,project_id=project,
                 fingerprint=digest,version=version,sheets=confirmed or copy.deepcopy(sheets),created_at=int(time()),
-                status='confirmed' if confirmed else 'proposed',confirmed_by=principal.user.id if confirmed else None,
+                status='confirmed' if confirmed else 'proposed',confirmed_by=principal.user.id if confirmed and not automatic else None,
                 confirmed_at=int(time()) if confirmed else None)
             db.add(item);db.flush()
+            if automatic:
+                audit(db,'global_mapping_auto_confirmed',principal.user.id,resource_type='mapping_proposal',
+                      resource_id=item.id,outcome='high_confidence_header_mapping_no_review_required')
         if item:result.append(item)
     return result
 
@@ -52,6 +61,7 @@ def view(db,principal,conversation,documents):
     missing_contracts=[pid for pid in project_ids if db.get(PlanningCodeContract,pid) is None]
     return dict(missing_contracts=missing_contracts,categories={k:sorted(v) for k,v in REQUIRED.items()},fingerprint=fingerprint(documents),project_ids=project_ids,
                 confirmed=all(x.status=='confirmed' for x in items),
+                automatic=all(x.status=='confirmed' and x.confirmed_by is None for x in items),
                 sheets=items[0].sheets,errors=mapping_errors(items[0].sheets))
 
 
@@ -103,7 +113,8 @@ def confirm(conversation_id:UUID,body:Confirmation,request:Request,principal:Aut
             sheet.update(kind=chosen.kind,columns=chosen.columns,conflicts=[])
         errors=mapping_errors(candidate)
         if errors:raise HTTPException(422,' '.join(errors))
-        if item.status=='confirmed' and candidate!=item.sheets:raise HTTPException(409,'Confirmed mappings are immutable')
+        if item.status=='confirmed' and item.confirmed_by is not None and candidate!=item.sheets:
+            raise HTTPException(409,'Confirmed mappings are immutable')
         item.sheets=candidate;item.status='confirmed';item.confirmed_by=principal.user.id;item.confirmed_at=int(time())
         audit(db,'global_mapping_confirmed',principal.user.id,resource_type='mapping_proposal',resource_id=item.id,outcome='format_only_not_financial_approval')
     db.flush()

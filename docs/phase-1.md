@@ -188,3 +188,16 @@ already-reserved months/credits remain review-required, not automatic delta paym
 Legacy finance-return/reconciliation adapters still require their own approved
 source contract. An activity reporting register is not settlement evidence. No
 status in the register or chat can mark actual payments settled.
+
+## End-of-run flag decisions (0021)
+
+One decision pass now follows processing. Findings are derived from the immutable
+structural validation snapshot (affected activity, hourly staff-month, project-wide
+evidence, or a missing validated report) and persisted with original source
+references, state and the deciding human. `invalidate` excludes the affected
+activity or staff-month from the payment request; it never adds money, invents a
+correction or substitutes for report/planning/staff evidence. Project-wide
+findings cannot be excluded: they require evidence or escalation. Escalation and
+"correct the source and reprocess" keep the project blocked. Draft snapshots bind
+the recorded decisions and their digest, so a later decision invalidates an
+unapproved draft. No transfer or settlement is performed.

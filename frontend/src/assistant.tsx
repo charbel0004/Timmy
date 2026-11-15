@@ -1,6 +1,7 @@
 import { WorkflowPayments } from "./workflow-payments";
 import { GlobalMappings } from "./global-mappings";
 import { ReportingRegisterPanel } from "./reporting-register";
+import { WorkflowFindings } from "./workflow-findings";
 import { createRequestId } from "./request-id";
 import { ExecutionTimeline } from "./observatory";
 import remarkGfm from "remark-gfm";
@@ -341,6 +342,7 @@ export function Assistant({ conversation, append, canReadProjects, csrfToken, on
         }} />}
       <GlobalMappings conversation={conversation?.id} csrf={csrfToken} canConfirm={canConfirmReports} revision={messages.length+documents.length} onResumed={refreshAfterEvidence} />
       <ReportingRegisterPanel onResumed={refreshAfterEvidence} conversation={conversation?.id} csrf={csrfToken} canDesignate={canDesignateReports} canConfirm={canConfirmReports} revision={messages.length+documents.length} />
+      <WorkflowFindings conversation={conversation?.id} csrf={csrfToken} permissions={projectPermissions} revision={messages.length+documents.length} onResumed={refreshAfterEvidence} />
       <WorkflowPayments conversation={conversation?.id} csrf={csrfToken} permissions={projectPermissions} revision={messages.length+documents.length} onResumed={refreshAfterEvidence} />
       <form className="chat-composer" onSubmit={submit}>
         <p className="muted"><Badge tone="cyan">Guarded operations</Badge> {projectScope ? "Attachments are limited to the selected project's conversation files." : "Timmy matches this conversation's source rows by approved project and activity codes; no project selection is needed."}</p>
