@@ -56,7 +56,7 @@ def test_global_chat_upload_maps_both_projects_and_stops_financial_work(client, 
     assert "Training Project (TCD): 1" in analyzed
     assert "Field Support (FOS): 1" in analyzed
     assert "UNKNOWN_PROJECT_CODE: 1" in analyzed
-    assert "no per-project validation" in analyzed.lower()
+    assert "Only intake/routing is verified" in analyzed
     processed = message("Process both project timesheets")
     assert "MULTI_PROJECT_VALIDATION_ADAPTER_REQUIRED" in processed
     assert "No cross-project source registration" in processed
